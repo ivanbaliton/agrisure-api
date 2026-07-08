@@ -5,11 +5,26 @@ namespace App\Http\Controllers;
 use App\Models\Claim;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Validator;
 
 class ClaimController extends Controller
 {
     /**
-     * Farmer: View own claims
+     * Centralized relationship tree reflecting the new normalized architecture:
+     * InsuranceApplication -> DamageReport -> Claim
+     */
+    private function claimRelations(): array
+    {
+        return [
+            'damageReport',
+            'damageReport.insuranceApplication',
+            'damageReport.insuranceApplication.farm.farmerProfile.user',
+            'damageReport.insuranceApplication.season',
+        ];
+    }
+
+    /**
+     * Farmer Mobile/Web: View own claims dynamically filtered by farmer profile
      */
     public function myClaims($user_id)
     {
@@ -21,16 +36,10 @@ class ClaimController extends Controller
             ], 404);
         }
 
-        $claims = Claim::with([
-            'damageReport',
-            'damageReport.farm',
-            'damageReport.season', // <--- Added for frontend filtering
-        ])
-            ->whereHas('damageReport.farm', function ($query) use ($user) {
-                $query->where(
-                    'farmer_profile_id',
-                    $user->farmerProfile->id
-                );
+        // Traverses the new deep relations down to the farmer_profile_id
+        $claims = Claim::with($this->claimRelations())
+            ->whereHas('damageReport.insuranceApplication.farm', function ($query) use ($user) {
+                $query->where('farmer_profile_id', $user->farmerProfile->id);
             })
             ->latest()
             ->get();
@@ -39,39 +48,28 @@ class ClaimController extends Controller
     }
 
     /**
-     * MAO: View all claims
+     * MAO Panel: View all claims for dashboard monitoring
      */
     public function index()
     {
-        return Claim::with([
-            'damageReport',
-            'damageReport.farm',
-            'damageReport.farm.farmerProfile',
-            'damageReport.farm.farmerProfile.user',
-            'damageReport.season', // <--- Added for frontend filtering
-        ])
+        $claims = Claim::with($this->claimRelations())
             ->latest()
             ->get();
+
+        return response()->json($claims);
     }
 
     /**
-     * View single claim details
+     * View specific details for a single claim instance
      */
     public function show($id)
     {
-        $claim = Claim::with([
-            'damageReport',
-            'damageReport.farm',
-            'damageReport.farm.farmerProfile',
-            'damageReport.farm.farmerProfile.user',
-            'damageReport.season', // <--- Added for frontend filtering
-        ])->findOrFail($id);
-
+        $claim = Claim::with($this->claimRelations())->findOrFail($id);
         return response()->json($claim);
     }
 
     /**
-     * MAO: Mark claim as submitted to PCIC
+     * MAO Action: Batch or single assignment marking claims as transmitted to PCIC
      */
     public function submitToPcic($id)
     {
@@ -83,69 +81,76 @@ class ClaimController extends Controller
         ]);
 
         return response()->json([
-            'message' => 'Claim marked as submitted to PCIC.',
-            'claim' => $claim->load([
-                'damageReport.farm.farmerProfile.user',
-                'damageReport.season',
-            ]),
+            'message' => 'Claim status successfully marked as submitted to PCIC.',
+            'claim' => $claim->load($this->claimRelations()),
         ]);
     }
 
     /**
-     * MAO: Encode PCIC result
-     */
-    /**
-     * MAO: Encode PCIC result
+     * MAO Action: Process and save final insurance adjustments sent by PCIC
      */
     public function updatePcicResult(Request $request, $id)
     {
-        $request->validate([
-            'result' => 'required|in:approved,rejected',
-            'claim_amount' => 'nullable|numeric|min:0',
+        $validator = Validator::make($request->all(), [
+            'result'         => 'required|in:approved,rejected',
+            'claim_amount'   => 'nullable|numeric|min:0',
             'claim_schedule' => 'nullable|date',
-            'claim_venue' => 'nullable|string|max:255',
-            'pcic_remarks' => 'nullable|string',
+            'claim_venue'    => 'nullable|string|max:255',
+            'pcic_remarks'   => 'nullable|string',
         ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Validation failed.',
+                'errors'  => $validator->errors()
+            ], 422);
+        }
 
         $claim = Claim::findOrFail($id);
 
         if ($request->result === 'approved') {
-            $request->validate([
-                'claim_amount' => 'required|numeric|min:0',
+            // Strict enforcement on approvals
+            $approvalValidator = Validator::make($request->all(), [
+                'claim_amount'   => 'required|numeric|min:0',
                 'claim_schedule' => 'required|date',
-                'claim_venue' => 'required|string|max:255',
+                'claim_venue'    => 'required|string|max:255',
             ]);
 
+            if ($approvalValidator->fails()) {
+                return response()->json([
+                    'message' => 'Approval fields are missing.',
+                    'errors'  => $approvalValidator->errors()
+                ], 422);
+            }
+
             $claim->update([
-                'claim_amount' => $request->claim_amount,
+                'claim_amount'   => $request->claim_amount,
                 'claim_schedule' => $request->claim_schedule,
-                'claim_venue' => $request->claim_venue,
-                'pcic_remarks' => $request->pcic_remarks,
-                'pcic_status' => 'approved', // <--- FIX: Save the approved flag
-                'status' => 'ready_for_claiming',
+                'claim_venue'    => $request->claim_venue,
+                'pcic_remarks'   => $request->pcic_remarks,
+                'pcic_status'    => 'approved',
+                'status'         => 'ready_for_claiming',
             ]);
         } else {
+            // Reject updates and clear any accidental payload items
             $claim->update([
-                'claim_amount' => null,
+                'claim_amount'   => null,
                 'claim_schedule' => null,
-                'claim_venue' => null,
-                'pcic_remarks' => $request->pcic_remarks,
-                'pcic_status' => 'rejected', // <--- FIX: Save the rejected flag
-                'status' => 'rejected', // <--- Make sure this matches your migration enum!
+                'claim_venue'    => null,
+                'pcic_remarks'   => $request->pcic_remarks,
+                'pcic_status'    => 'rejected',
+                'status'         => 'rejected',
             ]);
         }
 
         return response()->json([
-            'message' => 'PCIC result saved successfully.',
-            'claim' => $claim->load([
-                'damageReport.farm.farmerProfile.user',
-                'damageReport.season',
-            ]),
+            'message' => 'PCIC evaluation values applied successfully.',
+            'claim'   => $claim->load($this->claimRelations()),
         ]);
     }
 
     /**
-     * MAO: Mark claim as claimed / released
+     * MAO Action: Payout release validation flag
      */
     public function markClaimed($id)
     {
@@ -156,51 +161,30 @@ class ClaimController extends Controller
         ]);
 
         return response()->json([
-            'message' => 'Claim marked as claimed successfully.',
-            'claim' => $claim->load([
-                'damageReport.farm.farmerProfile.user',
-                'damageReport.season',
-            ]),
+            'message' => 'Claim status resolved as fully claimed.',
+            'claim'   => $claim->load($this->claimRelations()),
         ]);
     }
 
     /**
-     * General update, useful for inspection date or manual corrections
+     * Fallback Resource Update: Direct column adjustments
      */
     public function update(Request $request, $id)
     {
-        $request->validate([
-            'inspection_date' => 'nullable|date',
-            'claim_amount' => 'nullable|numeric|min:0',
-            'claim_schedule' => 'nullable|date',
-            'claim_venue' => 'nullable|string|max:255',
-            'pcic_status' => 'nullable|in:pending,approved,rejected',
-            'pcic_remarks' => 'nullable|string',
-            'status' => 'required|in:validated_by_mao,submitted_to_pcic,pcic_approved,pcic_rejected,ready_for_claiming,claimed',
-        ]);
-
         $claim = Claim::findOrFail($id);
 
-        $claim->update([
-            'inspection_date' => $request->inspection_date,
-            'claim_amount' => $request->claim_amount,
-            'claim_schedule' => $request->claim_schedule,
-            'claim_venue' => $request->claim_venue,
-            'pcic_status' => $request->pcic_status ?? $claim->pcic_status,
-            'pcic_remarks' => $request->pcic_remarks,
-            'status' => $request->status,
+        $validated = $request->validate([
+            'status'       => 'nullable|string',
+            'pcic_status'  => 'nullable|string',
+            'claim_amount' => 'nullable|numeric|min:0',
+            'pcic_remarks' => 'nullable|string',
         ]);
 
-        $claim->damageReport?->update([
-            'status' => $request->status,
-        ]);
+        $claim->update($validated);
 
         return response()->json([
-            'message' => 'Claim updated successfully.',
-            'claim' => $claim->load([
-                'damageReport.farm.farmerProfile.user',
-                'damageReport.season',
-            ]),
+            'message' => 'Resource records updated successfully.',
+            'claim'   => $claim->load($this->claimRelations()),
         ]);
     }
 }

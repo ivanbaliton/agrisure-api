@@ -10,19 +10,35 @@ use Illuminate\Support\Facades\Validator;
 
 class DamageReportController extends Controller
 {
+    /**
+     * Centralized relationships tree matching the normalized architecture.
+     * Traces farmer profiles and users properly through the Farm relation.
+     */
+    private function reportRelations(): array
+    {
+        return [
+            'insuranceApplication.farm.farmerProfile.user',
+            'insuranceApplication.season',
+            'claim',
+        ];
+    }
+
     public function store(Request $request)
     {
         // 1. Automatically find the application if Flutter only sent farm_id
         if ($request->has('farm_id') && !$request->has('insurance_application_id')) {
-            // Find the latest active application for this farm
+            // FIX: Explicitly scope down to applications matching the current OPEN season
             $application = InsuranceApplication::where('farm_id', $request->farm_id)
                 ->whereIn('status', ['submitted_to_mao', 'submitted_to_pcic', 'insured'])
+                ->whereHas('season', function ($query) {
+                    $query->where('status', 'open');
+                })
                 ->latest()
                 ->first();
 
             if (!$application) {
                 return response()->json([
-                    'message' => 'No active insurance application found for this farm. Cannot submit damage report.',
+                    'message' => 'No active insurance application found for this farm in the current open season. Cannot submit damage report.',
                 ], 422);
             }
             
@@ -75,7 +91,7 @@ class DamageReportController extends Controller
 
         $report = DamageReport::create([
             'insurance_application_id' => $application->id,
-            'farm_id'                  => $farm->id, // Keeps data safe for both schemas
+            'farm_id'                  => $farm->id, // Safe fallback for dual schemas
             'damage_cause'             => $request->damage_cause,
             'damage_date'              => $request->damage_date,
             'damage_image_path'        => $imagePath,
@@ -99,39 +115,28 @@ class DamageReportController extends Controller
 
     public function farmReports($farm_id)
     {
+        // FIX: Ensure historical reports fetched for this farm layout are strictly bound to the active season context
         return DamageReport::whereHas('insuranceApplication', function ($query) use ($farm_id) {
-            $query->where('farm_id', $farm_id);
+            $query->where('farm_id', $farm_id)
+                  ->whereHas('season', function ($sQuery) {
+                      $sQuery->where('status', 'open');
+                  });
         })
-        ->with([
-            'insuranceApplication.farm', // Included farm details
-            'insuranceApplication.farmerProfile.user',
-            'insuranceApplication.season',
-            'claim',
-        ])
+        ->with($this->reportRelations())
         ->latest()
         ->get();
     }
 
     public function index()
     {
-        return DamageReport::with([
-            'insuranceApplication.farm', // Included farm details
-            'insuranceApplication.farmerProfile.user',
-            'insuranceApplication.season',
-            'claim',
-        ])
+        return DamageReport::with($this->reportRelations())
         ->latest()
         ->get();
     }
 
     public function show($id)
     {
-        return DamageReport::with([
-            'insuranceApplication.farm', // Included farm details
-            'insuranceApplication.farmerProfile.user',
-            'insuranceApplication.season',
-            'claim',
-        ])->findOrFail($id);
+        return DamageReport::with($this->reportRelations())->findOrFail($id);
     }
 
     public function updateStatus(Request $request, $id)
@@ -158,12 +163,7 @@ class DamageReportController extends Controller
             'message' => $request->status === 'validated_by_mao'
                 ? 'Damage report validated and claim created.'
                 : 'Damage report status updated successfully.',
-            'damage_report' => $report->load([
-                'insuranceApplication.farm', // Included farm details
-                'insuranceApplication.farmerProfile.user',
-                'insuranceApplication.season',
-                'claim',
-            ]),
+            'damage_report' => $report->load($this->reportRelations()),
             'claim' => $claim,
         ]);
     }
