@@ -50,9 +50,26 @@ class ClaimController extends Controller
     /**
      * MAO Panel: View all claims for dashboard monitoring
      */
-    public function index()
+ /**
+     * MAO Panel: View all claims for dashboard monitoring
+     * Dynamically handles 'current' vs 'previous' crop cycle seasons
+     */
+    public function index(Request $request)
     {
+        // Default to showing 'current' seasons if no type parameter is supplied
+        $seasonType = $request->query('season_type', 'current');
+
         $claims = Claim::with($this->claimRelations())
+            ->whereHas('damageReport.insuranceApplication.season', function ($query) use ($seasonType) {
+                if ($seasonType === 'current') {
+                    // Decoupled logic: Fetch seasons that are either open for applications 
+                    // OR closed for applications but still active for crop monitoring/claims
+                    $query->whereIn('status', ['application_open', 'application_closed']);
+                } else {
+                    // Fetch completed/archived seasons
+                    $query->where('status', 'completed');
+                }
+            })
             ->latest()
             ->get();
 

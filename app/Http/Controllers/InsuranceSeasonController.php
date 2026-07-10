@@ -9,7 +9,8 @@ class InsuranceSeasonController extends Controller
 {
     private function getOrCreateCurrentSeason()
     {
-        $season = InsuranceSeason::where('status', 'open')
+        // ✅ UPDATED: Look for 'application_open' instead of 'open'
+        $season = InsuranceSeason::where('status', 'application_open')
             ->latest()
             ->first();
 
@@ -17,7 +18,7 @@ class InsuranceSeasonController extends Controller
             return InsuranceSeason::create([
                 'season_name' => 'Default Season ' . now()->year,
                 'deadline_date' => null,
-                'status' => 'open',
+                'status' => 'application_open', // ✅ UPDATED
                 'is_default' => true,
             ]);
         }
@@ -26,14 +27,15 @@ class InsuranceSeasonController extends Controller
             $season->deadline_date !== null &&
             now()->toDateString() > $season->deadline_date->toDateString()
         ) {
+            // ✅ UPDATED: Shift to 'application_closed' when deadline passes
             $season->update([
-                'status' => 'closed',
+                'status' => 'application_closed',
             ]);
 
             return InsuranceSeason::create([
                 'season_name' => 'Default Season ' . now()->year,
                 'deadline_date' => null,
-                'status' => 'open',
+                'status' => 'application_open', // ✅ UPDATED
                 'is_default' => true,
             ]);
         }
@@ -67,7 +69,7 @@ class InsuranceSeasonController extends Controller
         $season->update([
             'season_name' => $request->season_name,
             'deadline_date' => $request->deadline_date,
-            'status' => 'open',
+            'status' => 'application_open', // ✅ UPDATED: Enforce the new status enum value
             'is_default' => false,
         ]);
 
@@ -81,14 +83,15 @@ class InsuranceSeasonController extends Controller
     {
         $season = $this->getOrCreateCurrentSeason();
 
+        // ✅ UPDATED: Cleanly close the current enrollment period using 'application_closed'
         $season->update([
-            'status' => 'closed',
+            'status' => 'application_closed',
         ]);
 
         $newSeason = InsuranceSeason::create([
             'season_name' => 'Default Season ' . now()->year,
             'deadline_date' => null,
-            'status' => 'open',
+            'status' => 'application_open', // ✅ UPDATED
             'is_default' => true,
         ]);
 

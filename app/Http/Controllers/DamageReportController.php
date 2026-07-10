@@ -27,18 +27,19 @@ class DamageReportController extends Controller
     {
         // 1. Automatically find the application if Flutter only sent farm_id
         if ($request->has('farm_id') && !$request->has('insurance_application_id')) {
-            // FIX: Explicitly scope down to applications matching the current OPEN season
+            // DECOUPLED FIX: Allow damage reports during BOTH the open application stage 
+            // AND the active crop monitoring phase (application_closed).
             $application = InsuranceApplication::where('farm_id', $request->farm_id)
                 ->whereIn('status', ['submitted_to_mao', 'submitted_to_pcic', 'insured'])
                 ->whereHas('season', function ($query) {
-                    $query->where('status', 'open');
+                    $query->whereIn('status', ['application_open', 'application_closed']);
                 })
                 ->latest()
                 ->first();
 
             if (!$application) {
                 return response()->json([
-                    'message' => 'No active insurance application found for this farm in the current open season. Cannot submit damage report.',
+                    'message' => 'No active insurance application found for this farm in the current operational season cycle. Cannot submit damage report.',
                 ], 422);
             }
             
@@ -115,11 +116,12 @@ class DamageReportController extends Controller
 
     public function farmReports($farm_id)
     {
-        // FIX: Ensure historical reports fetched for this farm layout are strictly bound to the active season context
+        // DECOUPLED FIX: Keep historical records accessible to the app interface 
+        // throughout the full crop lifecycle window, rather than zeroing out when enrollment closes.
         return DamageReport::whereHas('insuranceApplication', function ($query) use ($farm_id) {
             $query->where('farm_id', $farm_id)
                   ->whereHas('season', function ($sQuery) {
-                      $sQuery->where('status', 'open');
+                      $sQuery->whereIn('status', ['application_open', 'application_closed']);
                   });
         })
         ->with($this->reportRelations())
@@ -127,11 +129,24 @@ class DamageReportController extends Controller
         ->get();
     }
 
-    public function index()
+    /**
+     * MAO Panel: View all damage reports
+     * Accepts an optional season_type parameter (current vs previous) to match frontend tabs
+     */
+    public function index(Request $request)
     {
+        $seasonType = $request->query('season_type', 'current');
+
         return DamageReport::with($this->reportRelations())
-        ->latest()
-        ->get();
+            ->whereHas('insuranceApplication.season', function ($query) use ($seasonType) {
+                if ($seasonType === 'current') {
+                    $query->whereIn('status', ['application_open', 'application_closed']);
+                } else {
+                    $query->where('status', 'completed');
+                }
+            })
+            ->latest()
+            ->get();
     }
 
     public function show($id)

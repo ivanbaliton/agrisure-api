@@ -12,7 +12,8 @@ class InsuranceApplicationController extends Controller
 {
     private function getOrCreateCurrentSeason()
     {
-        $season = InsuranceSeason::where('status', 'open')
+        // ✅ UPDATED: Look for 'application_open' instead of 'open'
+        $season = InsuranceSeason::where('status', 'application_open')
             ->latest()
             ->first();
 
@@ -20,7 +21,7 @@ class InsuranceApplicationController extends Controller
             $season = InsuranceSeason::create([
                 'season_name' => 'Default Season ' . now()->year,
                 'deadline_date' => null,
-                'status' => 'open',
+                'status' => 'application_open',
                 'is_default' => true,
             ]);
         }
@@ -87,9 +88,10 @@ class InsuranceApplicationController extends Controller
         $farm = Farm::findOrFail($request->farm_id);
         $season = $this->getOrCreateCurrentSeason();
 
-        if ($season->status !== 'open') {
+        // ✅ UPDATED: Enforce the 'application_open' phase check
+        if ($season->status !== 'application_open') {
             return response()->json([
-                'message' => 'This insurance season is already closed.',
+                'message' => 'This insurance season is already closed for applications.',
             ], 422);
         }
 
@@ -97,22 +99,25 @@ class InsuranceApplicationController extends Controller
             $season->deadline_date &&
             now()->toDateString() > $season->deadline_date->toDateString()
         ) {
+            // ✅ UPDATED: Set status to 'application_closed'
             $season->update([
-                'status' => 'closed',
+                'status' => 'application_closed',
             ]);
 
             $season = InsuranceSeason::create([
                 'season_name' => 'Default Season ' . now()->year,
                 'deadline_date' => null,
-                'status' => 'open',
+                'status' => 'application_open',
                 'is_default' => true,
             ]);
         }
 
+        // ✅ UPDATED: Prevent duplicate blocks if an application 'needs_revision' or was 'rejected'
         $existingFarmApplication = InsuranceApplication::where('farm_id', $farm->id)
             ->where('insurance_season_id', $season->id)
             ->whereIn('status', [
                 'submitted_to_mao',
+                'approved_for_pcic',
                 'submitted_to_pcic',
                 'insured',
             ])
@@ -120,7 +125,7 @@ class InsuranceApplicationController extends Controller
 
         if ($existingFarmApplication) {
             return response()->json([
-                'message' => 'This farm already has an active application for this season.',
+                'message' => 'This farm already has an active or pending application for this season.',
             ], 409);
         }
 
@@ -138,6 +143,7 @@ class InsuranceApplicationController extends Controller
         $freeCoverageLimit = 3.00;
         $premiumRatePerHectare = 1000;
 
+        // ✅ UPDATED: Exclude 'needs_revision' or 'rejected' from eating up their remaining free balance
         $usedFreeArea = InsuranceApplication::whereHas('farm', function ($query) use ($farm) {
             $query->where(
                 'farmer_profile_id',
@@ -147,6 +153,7 @@ class InsuranceApplicationController extends Controller
             ->where('insurance_season_id', $season->id)
             ->whereIn('status', [
                 'submitted_to_mao',
+                'approved_for_pcic',
                 'submitted_to_pcic',
                 'insured',
             ])
@@ -302,8 +309,6 @@ class InsuranceApplicationController extends Controller
         ])->findOrFail($id);
     }
 
-
-
     public function submitToPcic($id)
     {
         $application = InsuranceApplication::findOrFail($id);
@@ -429,6 +434,7 @@ class InsuranceApplicationController extends Controller
         $freeCoverageLimit = 3.00;
         $season = $this->getOrCreateCurrentSeason();
 
+        // ✅ UPDATED: Added 'approved_for_pcic' to match the active calculation
         $usedFreeArea = InsuranceApplication::whereHas(
             'farm.farmerProfile',
             function ($query) use ($user_id) {
@@ -438,6 +444,7 @@ class InsuranceApplicationController extends Controller
             ->where('insurance_season_id', $season->id)
             ->whereIn('status', [
                 'submitted_to_mao',
+                'approved_for_pcic',
                 'submitted_to_pcic',
                 'insured',
             ])
@@ -457,67 +464,64 @@ class InsuranceApplicationController extends Controller
     }
 
     public function farmHistory($farm_id)
-{
-    return InsuranceApplication::with([
-        'season',
-        'farm',
-        'farm.farmerProfile',
-        'farm.farmerProfile.user',
-    ])
-        ->where('farm_id', $farm_id)
-        ->latest()
-        ->get();
-}
+    {
+        return InsuranceApplication::with([
+            'season',
+            'farm',
+            'farm.farmerProfile',
+            'farm.farmerProfile.user',
+        ])
+            ->where('farm_id', $farm_id)
+            ->latest()
+            ->get();
+    }
 
+    public function history()
+    {
+        // ✅ UPDATED: Look for 'application_open' instead of 'open'
+        $currentSeason = InsuranceSeason::where('status', 'application_open')
+            ->where('is_default', false)
+            ->latest()
+            ->first();
 
-public function history()
-{
-    $currentSeason = InsuranceSeason::where('status', 'open')
-        ->where('is_default', false)
-        ->latest()
-        ->first();
+        return InsuranceApplication::with([
+            'farm',
+            'farm.farmerProfile',
+            'farm.farmerProfile.user',
+            'season',
+        ])
+            ->when($currentSeason, function ($query) use ($currentSeason) {
+                $query->where('insurance_season_id', '!=', $currentSeason->id);
+            })
+            ->latest()
+            ->get();
+    }
 
-    return InsuranceApplication::with([
-        'farm',
-        'farm.farmerProfile',
-        'farm.farmerProfile.user',
-        'season',
-    ])
-        ->when($currentSeason, function ($query) use ($currentSeason) {
-            $query->where('insurance_season_id', '!=', $currentSeason->id);
-        })
-        ->latest()
-        ->get();
-}
+    public function approveForPcic($id)
+    {
+        $application = InsuranceApplication::findOrFail($id);
 
-public function approveForPcic($id)
-{
-    $application = InsuranceApplication::findOrFail($id);
+        $application->update([
+            'status' => 'approved_for_pcic',
+        ]);
 
-    $application->update([
-        'status' => 'approved_for_pcic',
-    ]);
+        return response()->json([
+            'message' => 'Application approved for PCIC submission.',
+            'application' => $application,
+        ]);
+    }
 
-    return response()->json([
-        'message' => 'Application approved for PCIC submission.',
-        'application' => $application,
-    ]);
-}
+    public function needsRevision($id)
+    {
+        $application = InsuranceApplication::findOrFail($id);
 
-public function needsRevision($id)
-{
-    $application = InsuranceApplication::findOrFail($id);
+        $application->update([
+            'status' => 'needs_revision',
+        ]);
 
-    $application->update([
-        'status' => 'needs_revision',
-    ]);
-
-    return response()->json([
-        'message' => 'Application flagged for document revision.',
-        'application' => $application,
-    ]);
-}
-
-
-
+        return response()->json([
+            'message' => 'Application flagged for document revision.',
+            'application' => $application,
+        ]);
+    }
 }
