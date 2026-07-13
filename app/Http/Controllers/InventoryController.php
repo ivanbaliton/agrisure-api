@@ -36,11 +36,27 @@ class InventoryController extends Controller
     {
         $supply = InventorySupply::findOrFail($id);
 
-        $supply->update($request->all());
+        $validated = $request->validate([
+            'name' => 'required',
+            'category' => 'required',
+            'unit' => 'required',
+            'qty_available' => 'required|integer|min:0',
+            'low_threshold' => 'required|integer|min:0',
+        ]);
+
+        if ($validated['qty_available'] <= 0) {
+            $validated['status'] = 'out';
+        } elseif ($validated['qty_available'] <= $validated['low_threshold']) {
+            $validated['status'] = 'low';
+        } else {
+            $validated['status'] = 'in-stock';
+        }
+
+        $supply->update($validated);
 
         return response()->json([
             'message' => 'Supply updated successfully',
-            'data' => $supply
+            'data' => $supply->fresh(),
         ]);
     }
 
@@ -52,4 +68,6 @@ class InventoryController extends Controller
             'message' => 'Supply deleted'
         ]);
     }
+
+    
 }

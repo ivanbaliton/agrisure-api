@@ -35,13 +35,10 @@ class DistributionListController extends Controller
         $request->validate([
             'distribution_event_id' => 'nullable|exists:distribution_events,id',
             'barangay_id' => 'required|exists:barangays,id',
-
             'items' => 'required|array|min:1',
             'items.*.supply_id' => 'required|exists:inventory_supplies,id',
-
             'farmer_ids' => 'required|array|min:1',
             'farmer_ids.*' => 'exists:users,id',
-
             'allocations' => 'required|array|min:1',
             'allocations.*.farmer_id' => 'required|exists:users,id',
             'allocations.*.supply_id' => 'required|exists:inventory_supplies,id',
@@ -110,24 +107,58 @@ class DistributionListController extends Controller
 
     public function publish($id)
     {
-        $list = DistributionList::with($this->relations())
-            ->findOrFail($id);
+        return DB::transaction(function () use ($id) {
+            $list = DistributionList::with([
+                'items.supply',
+                'allocations',
+            ])->findOrFail($id);
 
-        if ($list->status !== 'draft') {
+            if ($list->status !== 'draft') {
+                return response()->json([
+                    'message' => 'Only draft distribution lists can be published.',
+                ], 422);
+            }
+
+            // Check stock first for all items before making any modifications
+            foreach ($list->items as $item) {
+                $supply = InventorySupply::findOrFail($item->supply_id);
+
+                if ($supply->qty_available < $item->quantity) {
+                    return response()->json([
+                        'message' => "Insufficient stock for {$supply->name}.",
+                    ], 422);
+                }
+            }
+
+            // Deduct overall batch inventory immediately upon publishing
+            foreach ($list->items as $item) {
+                $supply = InventorySupply::findOrFail($item->supply_id);
+
+                $supply->qty_available -= $item->quantity;
+                $supply->qty_distributed += $item->quantity;
+
+                // Update stock threshold statuses
+                if ($supply->qty_available <= 0) {
+                    $supply->status = 'out';
+                } elseif ($supply->qty_available <= $supply->low_threshold) {
+                    $supply->status = 'low';
+                } else {
+                    $supply->status = 'in-stock';
+                }
+
+                $supply->save();
+            }
+
+            $list->update([
+                'status' => 'published',
+                'published_at' => now(),
+            ]);
+
             return response()->json([
-                'message' => 'Only draft distribution lists can be published.',
-            ], 422);
-        }
-
-        $list->update([
-            'status' => 'published',
-            'published_at' => now(),
-        ]);
-
-        return response()->json([
-            'message' => 'Distribution published successfully. Barangay can now view it.',
-            'list' => $list->fresh($this->relations()),
-        ]);
+                'message' => 'Distribution published successfully.',
+                'list' => $list->fresh($this->relations()),
+            ]);
+        });
     }
 
     public function markFarmerReceived(Request $request, $listId, $farmerId)
@@ -174,28 +205,15 @@ class DistributionListController extends Controller
                     ], 422);
                 }
 
-                $supply = InventorySupply::findOrFail($supplyId);
-
-                if ($supply->qty_available < $receivedQty) {
-                    return response()->json([
-                        'message' => "Not enough stock for {$supply->name}.",
-                    ], 422);
-                }
-
-                $supply->qty_available -= $receivedQty;
-                $supply->qty_distributed += $receivedQty;
-                $supply->save();
+                // NOTE: Inventory deduction lines removed from here because stock 
+                // was already committed and deducted when the list was published.
             }
 
             $totalAllocated = $allocatedItems->sum('quantity');
-
-            $totalReceived = collect($request->received_items)
-                ->sum('quantity');
+            $totalReceived = collect($request->received_items)->sum('quantity');
 
             $farmer->update([
-                'claim_status' => $totalReceived >= $totalAllocated
-                    ? 'received'
-                    : 'partial',
+                'claim_status' => $totalReceived >= $totalAllocated ? 'received' : 'partial',
                 'received_at' => now(),
             ]);
 
@@ -228,36 +246,36 @@ class DistributionListController extends Controller
     }
 
     public function barangayIndex(Request $request)
-{
-    $barangayId = $request->user()->barangay_id;
+    {
+        $barangayId = $request->user()->barangay_id;
 
-    return DistributionList::with([
-        'event',
-        'items.supply',
-        'farmers.farmer',
-        'allocations.supply',
-        'allocations.farmer',
-    ])
-        ->where('barangay_id', $barangayId)
-        ->whereIn('status', ['published', 'completed'])
-        ->latest()
-        ->get();
-}
+        return DistributionList::with([
+            'event',
+            'items.supply',
+            'farmers.farmer',
+            'allocations.supply',
+            'allocations.farmer',
+        ])
+            ->where('barangay_id', $barangayId)
+            ->whereIn('status', ['published', 'completed'])
+            ->latest()
+            ->get();
+    }
 
-public function barangayShow(Request $request, $id)
-{
-    $barangayId = $request->user()->barangay_id;
+    public function barangayShow(Request $request, $id)
+    {
+        $barangayId = $request->user()->barangay_id;
 
-    return DistributionList::with([
-        'event',
-        'barangay',
-        'items.supply',
-        'farmers.farmer',
-        'allocations.supply',
-        'allocations.farmer',
-    ])
-        ->where('barangay_id', $barangayId)
-        ->whereIn('status', ['published', 'completed'])
-        ->findOrFail($id);
-}
+        return DistributionList::with([
+            'event',
+            'barangay',
+            'items.supply',
+            'farmers.farmer',
+            'allocations.supply',
+            'allocations.farmer',
+        ])
+            ->where('barangay_id', $barangayId)
+            ->whereIn('status', ['published', 'completed'])
+            ->findOrFail($id);
+    }
 }
