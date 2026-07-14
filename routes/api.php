@@ -200,6 +200,8 @@ Route::middleware('auth:sanctum')->group(function () {
     '/insurance-applications/farm/{farm_id}',
     [InsuranceApplicationController::class, 'farmHistory']);
 
+    Route::post('/insurance-seasons/new', [InsuranceSeasonController::class, 'createNewSeason']);
+
    
 
     
