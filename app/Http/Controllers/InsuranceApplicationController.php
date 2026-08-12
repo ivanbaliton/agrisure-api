@@ -12,7 +12,6 @@ class InsuranceApplicationController extends Controller
 {
     private function getOrCreateCurrentSeason()
     {
-        // ✅ UPDATED: Look for 'application_open' instead of 'open'
         $season = InsuranceSeason::where('status', 'application_open')
             ->latest()
             ->first();
@@ -45,6 +44,10 @@ class InsuranceApplicationController extends Controller
 
             'sowing_date' => 'nullable|date',
             'transplanting_date' => 'nullable|date',
+
+            'farm_location' => 'required|string|max:255',
+            'area' => 'required|numeric|min:0.01',
+            'land_category' => 'nullable|string|max:255',
 
             'north_boundary' => 'required|string|max:255',
             'east_boundary' => 'required|string|max:255',
@@ -88,7 +91,6 @@ class InsuranceApplicationController extends Controller
         $farm = Farm::findOrFail($request->farm_id);
         $season = $this->getOrCreateCurrentSeason();
 
-        // ✅ UPDATED: Enforce the 'application_open' phase check
         if ($season->status !== 'application_open') {
             return response()->json([
                 'message' => 'This insurance season is already closed for applications.',
@@ -99,7 +101,6 @@ class InsuranceApplicationController extends Controller
             $season->deadline_date &&
             now()->toDateString() > $season->deadline_date->toDateString()
         ) {
-            // ✅ UPDATED: Set status to 'application_closed'
             $season->update([
                 'status' => 'application_closed',
             ]);
@@ -112,7 +113,6 @@ class InsuranceApplicationController extends Controller
             ]);
         }
 
-        // ✅ UPDATED: Prevent duplicate blocks if an application 'needs_revision' or was 'rejected'
         $existingFarmApplication = InsuranceApplication::where('farm_id', $farm->id)
             ->where('insurance_season_id', $season->id)
             ->whereIn('status', [
@@ -143,7 +143,6 @@ class InsuranceApplicationController extends Controller
         $freeCoverageLimit = 3.00;
         $premiumRatePerHectare = 1000;
 
-        // ✅ UPDATED: Exclude 'needs_revision' or 'rejected' from eating up their remaining free balance
         $usedFreeArea = InsuranceApplication::whereHas('farm', function ($query) use ($farm) {
             $query->where(
                 'farmer_profile_id',
@@ -189,17 +188,13 @@ class InsuranceApplicationController extends Controller
         }
 
         $signaturePath = null;
-
         if ($request->hasFile('signature')) {
-            $signaturePath = $request->file('signature')
-                ->store('signatures', 'public');
+            $signaturePath = $request->file('signature')->store('signatures', 'public');
         }
 
         $paymentProofPath = null;
-
         if ($request->hasFile('payment_proof')) {
-            $paymentProofPath = $request->file('payment_proof')
-                ->store('payment_proofs', 'public');
+            $paymentProofPath = $request->file('payment_proof')->store('payment_proofs', 'public');
         }
 
         $application = InsuranceApplication::create([
@@ -216,6 +211,10 @@ class InsuranceApplicationController extends Controller
 
             'sowing_date' => $request->sowing_date,
             'transplanting_date' => $request->transplanting_date,
+
+            'farm_location' => $request->farm_location,
+            'area' => $request->area,
+            'land_category' => $request->land_category,
 
             'north_boundary' => $request->north_boundary,
             'east_boundary' => $request->east_boundary,
@@ -236,32 +235,19 @@ class InsuranceApplicationController extends Controller
             'free_coverage_after' => $freeCoverageAfter,
             'premium_amount' => $premiumAmount,
 
-            'payment_status' => $requiresPayment
-                ? 'pending_verification'
-                : 'not_required',
-
-            'payment_method' => $requiresPayment
-                ? 'gcash'
-                : null,
-
+            'payment_status' => $requiresPayment ? 'pending_verification' : 'not_required',
+            'payment_method' => $requiresPayment ? 'gcash' : null,
             'payment_proof_path' => $paymentProofPath,
-
-            'gcash_reference_number' => $requiresPayment
-                ? $request->gcash_reference_number
-                : null,
-
-            'payment_submitted_at' => $requiresPayment
-                ? now()
-                : null,
+            'gcash_reference_number' => $requiresPayment ? $request->gcash_reference_number : null,
+            'payment_submitted_at' => $requiresPayment ? now() : null,
 
             'client_uuid' => $request->client_uuid,
             'sync_source' => $request->sync_source ?? 'online',
             'captured_at' => $request->captured_at,
         ]);
 
-        $farm->update([
-            'insurance_status' => 'submitted_to_mao',
-        ]);
+        // ❌ REMOVED: $farm->update(['insurance_status' => 'submitted_to_mao']);
+        // Status is now computed dynamically on the Farm model for the active season.
 
         return response()->json([
             'message' => $requiresPayment
@@ -329,9 +315,7 @@ class InsuranceApplicationController extends Controller
             'status' => 'submitted_to_pcic',
         ]);
 
-        $application->farm->update([
-            'insurance_status' => 'submitted_to_pcic',
-        ]);
+        // ❌ REMOVED: $application->farm->update(['insurance_status' => 'submitted_to_pcic']);
 
         return response()->json([
             'message' => 'Application marked as submitted to PCIC.',
@@ -359,9 +343,7 @@ class InsuranceApplicationController extends Controller
             'status' => 'insured',
         ]);
 
-        $application->farm->update([
-            'insurance_status' => 'insured',
-        ]);
+        // ❌ REMOVED: $application->farm->update(['insurance_status' => 'insured']);
 
         return response()->json([
             'message' => 'Insurance application approved.',
@@ -378,9 +360,7 @@ class InsuranceApplicationController extends Controller
             'remarks' => $request->remarks,
         ]);
 
-        $application->farm->update([
-            'insurance_status' => 'rejected',
-        ]);
+        // ❌ REMOVED: $application->farm->update(['insurance_status' => 'rejected']);
 
         return response()->json([
             'message' => 'Insurance application rejected.',
@@ -434,7 +414,6 @@ class InsuranceApplicationController extends Controller
         $freeCoverageLimit = 3.00;
         $season = $this->getOrCreateCurrentSeason();
 
-        // ✅ UPDATED: Added 'approved_for_pcic' to match the active calculation
         $usedFreeArea = InsuranceApplication::whereHas(
             'farm.farmerProfile',
             function ($query) use ($user_id) {
@@ -478,7 +457,6 @@ class InsuranceApplicationController extends Controller
 
     public function history()
     {
-        // ✅ UPDATED: Look for 'application_open' instead of 'open'
         $currentSeason = InsuranceSeason::where('status', 'application_open')
             ->where('is_default', false)
             ->latest()

@@ -24,6 +24,11 @@ class InsuranceApplication extends Model
         'sowing_date',
         'transplanting_date',
 
+        // Farm / Land Details
+        'farm_location',
+        'area',
+        'land_category',
+
         // NEWS Information
         'north_boundary',
         'east_boundary',
@@ -63,6 +68,7 @@ class InsuranceApplication extends Model
         'sowing_date' => 'date',
         'transplanting_date' => 'date',
         'is_land_owner' => 'boolean',
+        'area' => 'decimal:2',
         'covered_free_area' => 'decimal:2',
         'excess_area' => 'decimal:2',
         'premium_amount' => 'decimal:2',

@@ -20,7 +20,7 @@ class DatabaseSeeder extends Seeder
         $maoAccounts = [
             ['MAO', 'One', 'christopherlancefrias@gmail.com', '09170000001'],
             ['MAO', 'Two', 'balitonivan0@gmail.com', '09170000002'],
-            ['MAO', 'Three', 'mao3@agrisure.com', '09170000003'],
+            ['MAO', 'Three', 'ivanruel.o.baliton@isu.edu.ph', '09170000003'],
             ['MAO', 'Four', 'mao4@agrisure.com', '09170000004'],
         ];
 

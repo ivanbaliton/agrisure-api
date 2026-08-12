@@ -47,4 +47,27 @@ class Farm extends Model
             DamageReport::class
         );
     }
+
+    public function activeApplication()
+{
+    return $this->hasOne(InsuranceApplication::class)
+        ->whereHas('season', function ($query) {
+            $query->where('status', 'application_open');
+        })
+        ->whereIn('status', [
+            'submitted_to_mao', 
+            'approved_for_pcic', 
+            'submitted_to_pcic', 
+            'insured'
+        ])
+        ->latest();
+}
+
+// Appends `insurance_status` dynamically to JSON responses
+protected $appends = ['insurance_status'];
+
+public function getInsuranceStatusAttribute()
+{
+    return $this->activeApplication ? $this->activeApplication->status : 'not_insured';
+}
 }

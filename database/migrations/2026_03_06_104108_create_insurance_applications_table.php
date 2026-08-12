@@ -41,7 +41,25 @@ return new class extends Migration
             $table->date('sowing_date')->nullable();
             $table->date('transplanting_date')->nullable();
 
-            // NEWS Information
+            /*
+            |--------------------------------------------------------------------------
+            | Farm / Land Details (from List of Farmers / Adjacent Lot Owners table)
+            |--------------------------------------------------------------------------
+            */
+
+            // Farm Location
+            $table->string('farm_location');
+
+            // Area (ha.)
+            $table->decimal('area', 8, 2)->default(0);
+
+            // *Land Category / Soil Type
+            // Rice: Irrigated - NIA/CIA, Irrigated - Deep Well Pump / STW,
+            //       Irrigated - Open Source (SWIP, Creek, River), Rainfed
+            // Corn: (A) Broad Plain - Clay Loam ... (E) Rolling/Upland
+            $table->string('land_category')->nullable();
+
+            // NEWS Information (Adjacent Lot Owners)
             $table->string('north_boundary');
             $table->string('east_boundary');
             $table->string('west_boundary');
@@ -51,6 +69,7 @@ return new class extends Migration
             $table->boolean('is_land_owner')
                 ->default(true);
 
+            // **Tenurial Status
             $table->enum('tenure_status', [
                 'Owner Cultivator',
                 'Tenant',

@@ -12,6 +12,9 @@ use App\Http\Controllers\InsuranceSeasonController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\BarangayController;
 use App\Http\Controllers\DistributionEventController;
+use App\Http\Controllers\DistributionNotificationController;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Response;
 
 Route::post('/register', [RegisterController::class, 'register']);
 Route::post('/login', [LoginController::class, 'login'])
@@ -24,6 +27,23 @@ Route::post('/otp/resend', [LoginController::class, 'resendOtp'])
     ->middleware('throttle:3,1');
 
 
+
+Route::get('/storage/signatures/{filename}', function ($filename) {
+    $path = 'signatures/' . $filename; // or your path in storage/app/public/signatures/
+
+    if (!Storage::disk('public')->exists($path)) {
+        abort(404);
+    }
+
+    $file = Storage::disk('public')->get($path);
+    $type = Storage::disk('public')->mimeType($path);
+
+    return Response::make($file, 200, [
+        'Content-Type' => $type,
+        'Access-Control-Allow-Origin' => '*',
+        'Access-Control-Allow-Methods' => 'GET, OPTIONS',
+    ]);
+});
 
 
 
@@ -299,3 +319,7 @@ Route::prefix('reports')->group(function () {
     Route::get('/executive', [ReportController::class, 'executive']);
 
 });
+
+
+
+Route::post('/distribution-events/{event}/notify', DistributionNotificationController::class);
