@@ -122,6 +122,11 @@ Route::middleware(['auth:sanctum', 'role:mao'])->group(function () {
 
     Route::patch('/distribution-events/{id}/publish', [DistributionEventController::class, 'publish']);
     Route::patch('/distribution-events/{id}/complete', [DistributionEventController::class, 'complete']);
+
+    Route::delete('/distribution-events/{id}', [
+    DistributionEventController::class,
+    'destroy'
+]);
 });
 
 
@@ -278,12 +283,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/claims/{id}', [ClaimController::class, 'show']);
     Route::put('/claims/{id}', [ClaimController::class, 'update']);
 
-    Route::patch('/claims/{id}/submit-to-pcic', [ClaimController::class, 'submitToPcic']);
+    Route::patch('/claims/{id}/downloadCas02Pdf', [ClaimController::class, 'downloadCas02Pdf']);
     Route::patch('/claims/{id}/pcic-result', [ClaimController::class, 'updatePcicResult']);
     Route::patch('/claims/{id}/release', [ClaimController::class, 'setRelease']);
     Route::patch('/claims/{id}/claimed', [ClaimController::class, 'markClaimed']);
 
     Route::get('/farmers/{user_id}/claims', [ClaimController::class, 'myClaims']);
+    Route::put('/claims/{id}/file-indemnity', [ClaimController::class, 'fileIndemnityClaim']);
+
 });
 
 

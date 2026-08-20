@@ -165,10 +165,12 @@ class DamageReportController extends Controller
 
         $claim = null;
         if ($request->status === 'validated_by_mao') {
+            // Creates the claim row in a 'pending_filing' state so the farmer is 
+            // required to file their CAS-02 indemnity details via the mobile app.
             $claim = Claim::firstOrCreate(
                 ['damage_report_id' => $report->id],
                 [
-                    'status'      => 'validated_by_mao',
+                    'status'      => 'pending_filing',
                     'pcic_status' => 'pending',
                 ]
             );
@@ -176,7 +178,7 @@ class DamageReportController extends Controller
 
         return response()->json([
             'message' => $request->status === 'validated_by_mao'
-                ? 'Damage report validated and claim created.'
+                ? 'Damage report validated. Claim initialized awaiting farmer indemnity filing.'
                 : 'Damage report status updated successfully.',
             'damage_report' => $report->load($this->reportRelations()),
             'claim' => $claim,

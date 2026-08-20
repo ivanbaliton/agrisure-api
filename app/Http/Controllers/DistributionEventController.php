@@ -117,22 +117,157 @@ class DistributionEventController extends Controller
     }
 
     public function publish($id)
-    {
-        $event = DistributionEvent::with('lists')->findOrFail($id);
+{
+    try {
+        $event = DB::transaction(function () use ($id) {
 
-        if ($event->status !== 'draft') {
-            return response()->json(['message' => 'Only draft events can be published.'], 422);
-        }
+            $event = DistributionEvent::with([
+                'lists.allocations'
+            ])->lockForUpdate()->findOrFail($id);
 
-        $now = now();
-        $event->update(['status' => 'published', 'published_at' => $now]);
-        $event->lists()->update(['status' => 'published', 'published_at' => $now]); // Optimized mass update
+            // Prevent publishing an event more than once
+            if ($event->status !== 'draft') {
+                throw new \Exception(
+                    'Only draft events can be published.'
+                );
+            }
+
+            if ($event->lists->isEmpty()) {
+                throw new \Exception(
+                    'This event has no barangay lists.'
+                );
+            }
+
+            /*
+             * ==========================================
+             * 1. Calculate total allocation per supply
+             * ==========================================
+             */
+
+            $supplyTotals = [];
+
+            foreach ($event->lists as $list) {
+
+                foreach ($list->allocations as $allocation) {
+
+                    $supplyId = $allocation->supply_id;
+                    $quantity = (int) $allocation->quantity;
+
+                    if ($quantity <= 0) {
+                        continue;
+                    }
+
+                    if (!isset($supplyTotals[$supplyId])) {
+                        $supplyTotals[$supplyId] = 0;
+                    }
+
+                    $supplyTotals[$supplyId] += $quantity;
+                }
+            }
+
+            if (empty($supplyTotals)) {
+                throw new \Exception(
+                    'No valid supply allocations were found.'
+                );
+            }
+
+            /*
+             * ==========================================
+             * 2. Check inventory availability
+             * ==========================================
+             */
+
+            foreach ($supplyTotals as $supplyId => $totalQuantity) {
+
+                $supply = \App\Models\InventorySupply::lockForUpdate()
+                    ->findOrFail($supplyId);
+
+                if ($supply->qty_available < $totalQuantity) {
+
+                    throw new \Exception(
+                        "Insufficient stock for {$supply->name}. " .
+                        "Available: {$supply->qty_available}, " .
+                        "Required: {$totalQuantity}."
+                    );
+                }
+            }
+
+            /*
+             * ==========================================
+             * 3. Deduct inventory
+             * ==========================================
+             */
+
+            foreach ($supplyTotals as $supplyId => $totalQuantity) {
+
+                $supply = \App\Models\InventorySupply::lockForUpdate()
+                    ->findOrFail($supplyId);
+
+                // Deduct available stock
+                $supply->qty_available -= $totalQuantity;
+
+                // Increase distributed quantity
+                $supply->qty_distributed =
+                    ($supply->qty_distributed ?? 0) + $totalQuantity;
+
+                // Update stock status
+                if ($supply->qty_available <= 0) {
+
+                    $supply->status = 'out';
+
+                } elseif (
+                    $supply->qty_available <= $supply->low_threshold
+                ) {
+
+                    $supply->status = 'low';
+
+                } else {
+
+                    $supply->status = 'in-stock';
+                }
+
+                $supply->save();
+            }
+
+            /*
+             * ==========================================
+             * 4. Publish event
+             * ==========================================
+             */
+
+            $now = now();
+
+            $event->update([
+                'status' => 'published',
+                'published_at' => $now,
+            ]);
+
+            /*
+             * ==========================================
+             * 5. Publish barangay lists
+             * ==========================================
+             */
+
+            $event->lists()->update([
+                'status' => 'published',
+                'published_at' => $now,
+            ]);
+
+            return $event->fresh($this->getEventRelations());
+        });
 
         return response()->json([
-            'message' => 'Distribution event published successfully.',
-            'event' => $event->fresh($this->getEventRelations()),
+            'message' => 'Distribution event published successfully. Inventory updated.',
+            'event' => $event,
         ]);
+
+    } catch (\Exception $e) {
+
+        return response()->json([
+            'message' => $e->getMessage(),
+        ], 422);
     }
+}
 
     public function complete($id)
     {
@@ -151,4 +286,60 @@ class DistributionEventController extends Controller
             'event' => $event->fresh($this->getEventRelations()),
         ]);
     }
+
+    public function destroy($id)
+{
+    try {
+        return DB::transaction(function () use ($id) {
+
+            $event = DistributionEvent::with('lists')->findOrFail($id);
+
+            // Only draft events can be deleted
+            if ($event->status !== 'draft') {
+                return response()->json([
+                    'message' => 'Only draft distribution events can be deleted.'
+                ], 422);
+            }
+
+            // Delete related records first
+            foreach ($event->lists as $list) {
+
+                // Delete allocations
+                DistributionAllocation::where(
+                    'distribution_list_id',
+                    $list->id
+                )->delete();
+
+                // Delete farmers/recipients
+                DistributionFarmer::where(
+                    'distribution_list_id',
+                    $list->id
+                )->delete();
+
+                // Delete supply items
+                DistributionItem::where(
+                    'distribution_list_id',
+                    $list->id
+                )->delete();
+
+                // Delete barangay list
+                $list->delete();
+            }
+
+            // Delete the event
+            $event->delete();
+
+            return response()->json([
+                'message' => 'Distribution event deleted successfully.'
+            ]);
+        });
+
+    } catch (\Exception $e) {
+
+        return response()->json([
+            'message' => 'Failed to delete distribution event.',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
 }

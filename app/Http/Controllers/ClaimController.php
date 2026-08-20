@@ -3,14 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Models\Claim;
-use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Barryvdh\DomPDF\Facade\Pdf;
 
 class ClaimController extends Controller
 {
     /**
-     * Centralized relationship tree reflecting the new normalized architecture:
+     * Centralized relationship tree reflecting the normalized architecture:
      * InsuranceApplication -> DamageReport -> Claim
      */
     private function claimRelations(): array
@@ -26,20 +26,20 @@ class ClaimController extends Controller
     /**
      * Farmer Mobile/Web: View own claims dynamically filtered by farmer profile
      */
-    public function myClaims($user_id)
+    public function myClaims(Request $request, $user_id)
     {
-        $user = User::with('farmerProfile')->findOrFail($user_id);
+        $seasonType = $request->query('season_type', 'current');
 
-        if (!$user->farmerProfile) {
-            return response()->json([
-                'message' => 'Farmer profile not found.'
-            ], 404);
-        }
-
-        // Traverses the new deep relations down to the farmer_profile_id
         $claims = Claim::with($this->claimRelations())
-            ->whereHas('damageReport.insuranceApplication.farm', function ($query) use ($user) {
-                $query->where('farmer_profile_id', $user->farmerProfile->id);
+            ->whereHas('damageReport.insuranceApplication.farm.farmerProfile', function ($query) use ($user_id) {
+                $query->where('user_id', $user_id);
+            })
+            ->whereHas('damageReport.insuranceApplication.season', function ($query) use ($seasonType) {
+                if ($seasonType === 'current') {
+                    $query->whereIn('status', ['application_open', 'application_closed']);
+                } else {
+                    $query->whereNotIn('status', ['application_open', 'application_closed']);
+                }
             })
             ->latest()
             ->get();
@@ -50,24 +50,17 @@ class ClaimController extends Controller
     /**
      * MAO Panel: View all claims for dashboard monitoring
      */
- /**
-     * MAO Panel: View all claims for dashboard monitoring
-     * Dynamically handles 'current' vs 'previous' crop cycle seasons
-     */
     public function index(Request $request)
     {
-        // Default to showing 'current' seasons if no type parameter is supplied
         $seasonType = $request->query('season_type', 'current');
 
         $claims = Claim::with($this->claimRelations())
+            ->has('damageReport.insuranceApplication.season')
             ->whereHas('damageReport.insuranceApplication.season', function ($query) use ($seasonType) {
                 if ($seasonType === 'current') {
-                    // Decoupled logic: Fetch seasons that are either open for applications 
-                    // OR closed for applications but still active for crop monitoring/claims
                     $query->whereIn('status', ['application_open', 'application_closed']);
                 } else {
-                    // Fetch completed/archived seasons
-                    $query->where('status', 'completed');
+                    $query->whereNotIn('status', ['application_open', 'application_closed']);
                 }
             })
             ->latest()
@@ -86,25 +79,124 @@ class ClaimController extends Controller
     }
 
     /**
-     * MAO Action: Batch or single assignment marking claims as transmitted to PCIC
+     * Farmer Mobile: File CAS-02 form
+     * Automatically transitions status to 'under_mao_review'
      */
-    public function submitToPcic($id)
+    public function fileIndemnityClaim(Request $request, $id)
     {
-        $claim = Claim::findOrFail($id);
+        $validator = Validator::make($request->all(), [
+            'crop_stage_at_loss'           => 'required|string|max:255',
+            'area_damaged'                 => 'required|numeric|min:0',
+            'degree_of_damage'             => 'required|numeric|min:0|max:100',
+            'expected_harvest_date'        => 'required|string|max:255',
+            'cost_land_preparation'        => 'required|numeric|min:0',
+            'cost_seedling_transplanting'  => 'required|numeric|min:0',
+            'cost_seeds'                   => 'required|numeric|min:0',
+            'cost_fertilizer'              => 'required|numeric|min:0',
+            'cost_chemicals'               => 'required|numeric|min:0',
+            'cost_others'                  => 'nullable|numeric|min:0',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Validation failed.',
+                'errors'  => $validator->errors()
+            ], 422);
+        }
+
+        // 1. Look up exact Claim ID first to avoid grabbing pre-existing filled claims
+        $claim = Claim::with($this->claimRelations())->find($id);
+
+        // 2. Fall back to matching pending_filing claims via damage_report_id if claim ID isn't provided
+        if (!$claim) {
+            $claim = Claim::with($this->claimRelations())
+                ->where('damage_report_id', $id)
+                ->where('status', 'pending_filing')
+                ->first();
+        }
+
+        if (!$claim) {
+            return response()->json([
+                'message' => "No claim record found matching ID {$id}."
+            ], 404);
+        }
+
+        $user = $request->user()?->load('farmerProfile');
+
+        if (!$user || !$user->farmerProfile) {
+            return response()->json(['message' => 'Farmer profile not found.'], 404);
+        }
+
+        $claimFarmerProfileId = $claim->damageReport
+            ?->insuranceApplication
+            ?->farm
+            ?->farmer_profile_id;
+
+        if ($claimFarmerProfileId !== $user->farmerProfile->id) {
+            return response()->json(['message' => 'You are not authorized to file this claim.'], 403);
+        }
+
+        if ($claim->degree_of_damage !== null) {
+            return response()->json(['message' => 'This claim has already been filed.'], 422);
+        }
+
+        if ($claim->status !== 'pending_filing') {
+            return response()->json(['message' => 'This claim is not ready to be filed yet.'], 422);
+        }
+
+        $costLandPrep     = (float) $request->input('cost_land_preparation', 0);
+        $costTransplant   = (float) $request->input('cost_seedling_transplanting', 0);
+        $costSeeds        = (float) $request->input('cost_seeds', 0);
+        $costFertilizer   = (float) $request->input('cost_fertilizer', 0);
+        $costChemicals    = (float) $request->input('cost_chemicals', 0);
+        $costOthers       = (float) $request->input('cost_others', 0);
+
+        $totalProductionCost = $costLandPrep + $costTransplant + $costSeeds + $costFertilizer + $costChemicals + $costOthers;
 
         $claim->update([
-            'status' => 'submitted_to_pcic',
-            'submitted_to_pcic_at' => now(),
+            'crop_stage_at_loss'          => $request->input('crop_stage_at_loss'),
+            'area_damaged'                => (float) $request->input('area_damaged'),
+            'degree_of_damage'            => (float) $request->input('degree_of_damage'),
+            'expected_harvest_date'       => $request->input('expected_harvest_date'),
+            'cost_land_preparation'       => $costLandPrep,
+            'cost_seedling_transplanting' => $costTransplant,
+            'cost_seeds'                   => $costSeeds,
+            'cost_fertilizer'              => $costFertilizer,
+            'cost_chemicals'               => $costChemicals,
+            'cost_others'                 => $costOthers,
+            'total_production_cost'       => $totalProductionCost,
+            'claim_filed_date'            => now()->toDateString(),
+            'status'                      => 'under_mao_review', // Auto-transition
         ]);
 
         return response()->json([
-            'message' => 'Claim status successfully marked as submitted to PCIC.',
-            'claim' => $claim->load($this->claimRelations()),
+            'message' => 'Indemnity claim filed successfully.',
+            'claim'   => $claim->fresh($this->claimRelations()),
         ]);
     }
 
     /**
-     * MAO Action: Process and save final insurance adjustments sent by PCIC
+     * MAO Action: Generating/Downloading PDF for physical submission
+     * Automatically transitions status to 'in_pcic_processing'
+     */
+    public function downloadCas02Pdf($id)
+    {
+        $claim = Claim::with($this->claimRelations())->findOrFail($id);
+
+        if ($claim->status === 'under_mao_review') {
+            $claim->update([
+                'status'               => 'in_pcic_processing',
+                'submitted_to_pcic_at' => now(),
+            ]);
+        }
+
+        $pdf = Pdf::loadView('pdf.cas02', compact('claim'));
+        return $pdf->download("CAS-02_Claim_{$id}.pdf");
+    }
+
+    /**
+     * MAO Action: Process and save final insurance results from PCIC
+     * Automatically transitions status to 'ready_for_claiming' or 'pcic_rejected'
      */
     public function updatePcicResult(Request $request, $id)
     {
@@ -126,7 +218,6 @@ class ClaimController extends Controller
         $claim = Claim::findOrFail($id);
 
         if ($request->result === 'approved') {
-            // Strict enforcement on approvals
             $approvalValidator = Validator::make($request->all(), [
                 'claim_amount'   => 'required|numeric|min:0',
                 'claim_schedule' => 'required|date',
@@ -146,17 +237,16 @@ class ClaimController extends Controller
                 'claim_venue'    => $request->claim_venue,
                 'pcic_remarks'   => $request->pcic_remarks,
                 'pcic_status'    => 'approved',
-                'status'         => 'ready_for_claiming',
+                'status'         => 'ready_for_claiming', // Auto-transition
             ]);
         } else {
-            // Reject updates and clear any accidental payload items
             $claim->update([
                 'claim_amount'   => null,
                 'claim_schedule' => null,
                 'claim_venue'    => null,
                 'pcic_remarks'   => $request->pcic_remarks,
                 'pcic_status'    => 'rejected',
-                'status'         => 'rejected',
+                'status'         => 'pcic_rejected', // Auto-transition
             ]);
         }
 
@@ -167,14 +257,16 @@ class ClaimController extends Controller
     }
 
     /**
-     * MAO Action: Payout release validation flag
+     * MAO Action: Payout release confirmation
+     * Automatically transitions status to 'claimed'
      */
     public function markClaimed($id)
     {
         $claim = Claim::findOrFail($id);
 
         $claim->update([
-            'status' => 'claimed',
+            'claimed_at' => now(),
+            'status'     => 'claimed', // Auto-transition
         ]);
 
         return response()->json([
@@ -204,4 +296,4 @@ class ClaimController extends Controller
             'claim'   => $claim->load($this->claimRelations()),
         ]);
     }
-}
+}       
