@@ -57,6 +57,17 @@ class InsuranceApplication extends Model
         'free_coverage_before',
         'free_coverage_after',
 
+        // Planting Verification (Farm Capture)
+        'planting_photo_path',
+        'planting_photo_latitude',
+        'planting_photo_longitude',
+        'planting_photo_accuracy_meters',
+        'planting_photo_captured_at',
+        'is_within_geofence',
+        'distance_from_farm_meters',
+        'capture_status',
+        'capture_remarks',
+
         // Offline Sync Support
         'client_uuid',
         'sync_source',
@@ -77,6 +88,14 @@ class InsuranceApplication extends Model
         'free_coverage_after' => 'decimal:2',
         'captured_at' => 'datetime',
         'payment_submitted_at' => 'datetime',
+
+        // Planting Verification (Farm Capture)
+        'planting_photo_latitude' => 'decimal:7',
+        'planting_photo_longitude' => 'decimal:7',
+        'planting_photo_accuracy_meters' => 'decimal:2',
+        'planting_photo_captured_at' => 'datetime',
+        'is_within_geofence' => 'boolean',
+        'distance_from_farm_meters' => 'decimal:2',
     ];
 
     public function farm()

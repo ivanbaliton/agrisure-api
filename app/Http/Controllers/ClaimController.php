@@ -195,17 +195,18 @@ class ClaimController extends Controller
     }
 
     /**
-     * MAO Action: Process and save final insurance results from PCIC
+     * MAO Action: Process and save final insurance results from PCIC.
+     * Schedule/venue are NOT set here anymore — MAO assigns those later,
+     * in bulk, via bulkSetSchedule() after selecting approved claims
+     * with checkboxes in the panel.
+     *
      * Automatically transitions status to 'ready_for_claiming' or 'pcic_rejected'
      */
     public function updatePcicResult(Request $request, $id)
     {
         $validator = Validator::make($request->all(), [
-            'result'         => 'required|in:approved,rejected',
-            'claim_amount'   => 'nullable|numeric|min:0',
-            'claim_schedule' => 'nullable|date',
-            'claim_venue'    => 'nullable|string|max:255',
-            'pcic_remarks'   => 'nullable|string',
+            'result'       => 'required|in:approved,rejected',
+            'pcic_remarks' => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
@@ -218,30 +219,13 @@ class ClaimController extends Controller
         $claim = Claim::findOrFail($id);
 
         if ($request->result === 'approved') {
-            $approvalValidator = Validator::make($request->all(), [
-                'claim_amount'   => 'required|numeric|min:0',
-                'claim_schedule' => 'required|date',
-                'claim_venue'    => 'required|string|max:255',
-            ]);
-
-            if ($approvalValidator->fails()) {
-                return response()->json([
-                    'message' => 'Approval fields are missing.',
-                    'errors'  => $approvalValidator->errors()
-                ], 422);
-            }
-
             $claim->update([
-                'claim_amount'   => $request->claim_amount,
-                'claim_schedule' => $request->claim_schedule,
-                'claim_venue'    => $request->claim_venue,
-                'pcic_remarks'   => $request->pcic_remarks,
-                'pcic_status'    => 'approved',
-                'status'         => 'ready_for_claiming', // Auto-transition
+                'pcic_remarks' => $request->pcic_remarks,
+                'pcic_status'  => 'approved',
+                'status'       => 'ready_for_claiming', // Auto-transition
             ]);
         } else {
             $claim->update([
-                'claim_amount'   => null,
                 'claim_schedule' => null,
                 'claim_venue'    => null,
                 'pcic_remarks'   => $request->pcic_remarks,
@@ -253,6 +237,62 @@ class ClaimController extends Controller
         return response()->json([
             'message' => 'PCIC evaluation values applied successfully.',
             'claim'   => $claim->load($this->claimRelations()),
+        ]);
+    }
+
+    /**
+     * MAO Panel: Bulk-assign ONE claiming date + venue to MULTIPLE claims
+     * at once. Flow: MAO checks several claims in a table -> clicks
+     * "Set Claiming Schedule" -> modal collects date + venue -> this
+     * endpoint applies it to every checked claim ID.
+     *
+     * Only claims currently in 'ready_for_claiming' (i.e. PCIC-approved,
+     * awaiting a schedule) are eligible; others are silently skipped
+     * and reported back so the UI can flag them.
+     */
+    public function bulkSetSchedule(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'claim_ids'         => 'required|array|min:1',
+            'claim_ids.*'       => 'integer|exists:claims,id',
+            'claim_schedule'    => 'required|date',
+            'claim_venue'       => 'required|string|max:255',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Validation failed.',
+                'errors'  => $validator->errors()
+            ], 422);
+        }
+
+        $eligibleIds = Claim::whereIn('id', $request->claim_ids)
+            ->where('status', 'ready_for_claiming')
+            ->pluck('id');
+
+        $skippedIds = collect($request->claim_ids)->diff($eligibleIds)->values();
+
+        if ($eligibleIds->isEmpty()) {
+            return response()->json([
+                'message' => 'None of the selected claims are eligible for scheduling.',
+                'skipped_claim_ids' => $skippedIds,
+            ], 422);
+        }
+
+        Claim::whereIn('id', $eligibleIds)->update([
+            'claim_schedule' => $request->claim_schedule,
+            'claim_venue'    => $request->claim_venue,
+        ]);
+
+        $updatedClaims = Claim::with($this->claimRelations())
+            ->whereIn('id', $eligibleIds)
+            ->get();
+
+        return response()->json([
+            'message'           => count($eligibleIds) . ' claim(s) scheduled successfully.',
+            'updated_claim_ids' => $eligibleIds,
+            'skipped_claim_ids' => $skippedIds,
+            'claims'            => $updatedClaims,
         ]);
     }
 
@@ -285,7 +325,6 @@ class ClaimController extends Controller
         $validated = $request->validate([
             'status'       => 'nullable|string',
             'pcic_status'  => 'nullable|string',
-            'claim_amount' => 'nullable|numeric|min:0',
             'pcic_remarks' => 'nullable|string',
         ]);
 
@@ -296,4 +335,4 @@ class ClaimController extends Controller
             'claim'   => $claim->load($this->claimRelations()),
         ]);
     }
-}       
+}

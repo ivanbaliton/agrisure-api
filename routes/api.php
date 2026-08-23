@@ -227,7 +227,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/insurance-seasons/new', [InsuranceSeasonController::class, 'createNewSeason']);
 
-   
+   Route::post('/insurance-applications/{id}/capture-planting', [InsuranceApplicationController::class, 'capturePlanting']);
+    Route::post('/insurance-applications/{id}/verify-capture', [InsuranceApplicationController::class, 'verifyPlantingCapture']);
+    Route::post('/insurance-applications/{id}/reject-capture', [InsuranceApplicationController::class, 'rejectPlantingCapture']);
 
     
 
@@ -290,6 +292,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/farmers/{user_id}/claims', [ClaimController::class, 'myClaims']);
     Route::put('/claims/{id}/file-indemnity', [ClaimController::class, 'fileIndemnityClaim']);
+
+    Route::post('/claims/bulk-schedule', [ClaimController::class, 'bulkSetSchedule']);
+ 
 
 });
 

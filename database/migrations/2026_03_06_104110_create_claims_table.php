@@ -42,7 +42,6 @@ return new class extends Migration
                 'rejected',
             ])->default('pending');
 
-            $table->decimal('claim_amount', 10, 2)->nullable();
             $table->text('pcic_remarks')->nullable();
             $table->date('claim_schedule')->nullable();
             $table->string('claim_venue')->nullable();

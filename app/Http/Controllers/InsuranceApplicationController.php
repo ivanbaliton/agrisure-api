@@ -10,6 +10,8 @@ use Illuminate\Support\Facades\Validator;
 
 class InsuranceApplicationController extends Controller
 {
+    private const GEOFENCE_RADIUS_METERS = 500;
+
     private function getOrCreateCurrentSeason()
     {
         $season = InsuranceSeason::where('status', 'application_open')
@@ -246,9 +248,6 @@ class InsuranceApplicationController extends Controller
             'captured_at' => $request->captured_at,
         ]);
 
-        // ❌ REMOVED: $farm->update(['insurance_status' => 'submitted_to_mao']);
-        // Status is now computed dynamically on the Farm model for the active season.
-
         return response()->json([
             'message' => $requiresPayment
                 ? 'Insurance application submitted. Payment proof is pending MAO verification.'
@@ -273,6 +272,132 @@ class InsuranceApplicationController extends Controller
         ], 201);
     }
 
+    public function capturePlanting(Request $request, $id)
+    {
+        $application = InsuranceApplication::with('farm')->findOrFail($id);
+
+        $validator = Validator::make($request->all(), [
+            'planting_photo' => 'required|image|mimes:png,jpg,jpeg|max:5120',
+            'latitude' => 'required|numeric|between:-90,90',
+            'longitude' => 'required|numeric|between:-180,180',
+            'accuracy_meters' => 'nullable|numeric|min:0',
+            'captured_at' => 'nullable|date',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Validation error',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        if (in_array($application->status, ['rejected', 'insured'])) {
+            return response()->json([
+                'message' => 'Planting photo cannot be submitted for an application in "' . $application->status . '" status.',
+            ], 422);
+        }
+
+        $photoPath = $request->file('planting_photo')->store('planting_photos', 'public');
+
+        $distanceMeters = null;
+        $isWithinGeofence = null;
+
+        $farm = $application->farm;
+        if ($farm && isset($farm->latitude) && isset($farm->longitude)) {
+            $distanceMeters = $this->haversineDistanceMeters(
+                (float) $farm->latitude,
+                (float) $farm->longitude,
+                (float) $request->latitude,
+                (float) $request->longitude
+            );
+
+            $isWithinGeofence = $distanceMeters <= self::GEOFENCE_RADIUS_METERS;
+        }
+
+        $application->update([
+            'planting_photo_path' => $photoPath,
+            'planting_photo_latitude' => $request->latitude,
+            'planting_photo_longitude' => $request->longitude,
+            'planting_photo_accuracy_meters' => $request->accuracy_meters,
+            'planting_photo_captured_at' => $request->captured_at ?? now(),
+            'is_within_geofence' => $isWithinGeofence,
+            'distance_from_farm_meters' => $distanceMeters,
+            'capture_status' => 'pending',
+            'capture_remarks' => null,
+        ]);
+
+        return response()->json([
+            'message' => 'Planting photo submitted. Pending MAO verification.',
+            'application' => $application,
+            'geofence' => [
+                'distance_from_farm_meters' => $distanceMeters,
+                'is_within_geofence' => $isWithinGeofence,
+                'radius_meters' => self::GEOFENCE_RADIUS_METERS,
+            ],
+        ]);
+    }
+
+    public function verifyPlantingCapture($id)
+    {
+        $application = InsuranceApplication::findOrFail($id);
+
+        if (!$application->planting_photo_path) {
+            return response()->json([
+                'message' => 'No planting photo has been submitted for this application yet.',
+            ], 422);
+        }
+
+        $application->update([
+            'capture_status' => 'verified',
+        ]);
+
+        return response()->json([
+            'message' => 'Planting photo verified.',
+            'application' => $application,
+        ]);
+    }
+
+    public function rejectPlantingCapture(Request $request, $id)
+    {
+        $application = InsuranceApplication::findOrFail($id);
+
+        if (!$application->planting_photo_path) {
+            return response()->json([
+                'message' => 'No planting photo has been submitted for this application yet.',
+            ], 422);
+        }
+
+        $application->update([
+            'capture_status' => 'rejected',
+            'capture_remarks' => $request->remarks,
+        ]);
+
+        return response()->json([
+            'message' => 'Planting photo rejected.',
+            'application' => $application,
+        ]);
+    }
+
+    private function haversineDistanceMeters(
+        float $lat1,
+        float $lon1,
+        float $lat2,
+        float $lon2
+    ): float {
+        $earthRadiusMeters = 6371000;
+
+        $latDelta = deg2rad($lat2 - $lat1);
+        $lonDelta = deg2rad($lon2 - $lon1);
+
+        $a = sin($latDelta / 2) * sin($latDelta / 2) +
+            cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
+            sin($lonDelta / 2) * sin($lonDelta / 2);
+
+        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
+
+        return round($earthRadiusMeters * $c, 2);
+    }
+
     public function index()
     {
         return InsuranceApplication::with([
@@ -295,6 +420,9 @@ class InsuranceApplicationController extends Controller
         ])->findOrFail($id);
     }
 
+    /**
+     * Final action by MAO when downloading/exporting forms or submitting batch to PCIC.
+     */
     public function submitToPcic($id)
     {
         $application = InsuranceApplication::findOrFail($id);
@@ -315,14 +443,15 @@ class InsuranceApplicationController extends Controller
             'status' => 'submitted_to_pcic',
         ]);
 
-        // ❌ REMOVED: $application->farm->update(['insurance_status' => 'submitted_to_pcic']);
-
         return response()->json([
-            'message' => 'Application marked as submitted to PCIC.',
+            'message' => 'Application status updated to Endorsed/Submitted to PCIC.',
             'application' => $application,
         ]);
     }
 
+    /**
+     * Optional manual override if needed (e.g., farmer presents SMS proof at MAO office).
+     */
     public function approve($id)
     {
         $application = InsuranceApplication::findOrFail($id);
@@ -343,10 +472,8 @@ class InsuranceApplicationController extends Controller
             'status' => 'insured',
         ]);
 
-        // ❌ REMOVED: $application->farm->update(['insurance_status' => 'insured']);
-
         return response()->json([
-            'message' => 'Insurance application approved.',
+            'message' => 'Insurance application marked as insured.',
             'application' => $application,
         ]);
     }
@@ -359,8 +486,6 @@ class InsuranceApplicationController extends Controller
             'status' => 'rejected',
             'remarks' => $request->remarks,
         ]);
-
-        // ❌ REMOVED: $application->farm->update(['insurance_status' => 'rejected']);
 
         return response()->json([
             'message' => 'Insurance application rejected.',
@@ -475,19 +600,31 @@ class InsuranceApplicationController extends Controller
             ->get();
     }
 
-    public function approveForPcic($id)
-    {
-        $application = InsuranceApplication::findOrFail($id);
+   public function approveForPcic($id)
+{
+    $application = InsuranceApplication::findOrFail($id);
 
-        $application->update([
-            'status' => 'approved_for_pcic',
-        ]);
-
+    if ($application->payment_status === 'pending_verification') {
         return response()->json([
-            'message' => 'Application approved for PCIC submission.',
-            'application' => $application,
-        ]);
+            'message' => 'Payment must be verified before this application can proceed to PCIC.',
+        ], 422);
     }
+
+    if ($application->payment_status === 'rejected') {
+        return response()->json([
+            'message' => 'Payment proof was rejected. Application cannot proceed to PCIC.',
+        ], 422);
+    }
+
+    $application->update([
+        'status' => 'approved_for_pcic',
+    ]);
+
+    return response()->json([
+        'message' => 'Application approved for PCIC submission.',
+        'application' => $application,
+    ]);
+}
 
     public function needsRevision($id)
     {

@@ -135,6 +135,34 @@ return new class extends Migration
 
             /*
             |--------------------------------------------------------------------------
+            | Planting Verification (Farm Capture)
+            |--------------------------------------------------------------------------
+            | Farmer must photograph the actual planted farm with geolocation so
+            | MAO/PCIC can verify the crop was really planted before approval.
+            */
+
+            $table->string('planting_photo_path')->nullable();
+
+            $table->decimal('planting_photo_latitude', 10, 7)->nullable();
+            $table->decimal('planting_photo_longitude', 10, 7)->nullable();
+            $table->decimal('planting_photo_accuracy_meters', 8, 2)->nullable();
+
+            $table->timestamp('planting_photo_captured_at')->nullable();
+
+            // Whether the GPS coords fall within the expected farm boundary/radius
+            $table->boolean('is_within_geofence')->nullable();
+            $table->decimal('distance_from_farm_meters', 8, 2)->nullable();
+
+            $table->enum('capture_status', [
+                'pending',
+                'verified',
+                'rejected'
+            ])->default('pending');
+
+            $table->text('capture_remarks')->nullable();
+
+            /*
+            |--------------------------------------------------------------------------
             | Offline Sync
             |--------------------------------------------------------------------------
             */
