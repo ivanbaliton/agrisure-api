@@ -13,15 +13,15 @@ class ClaimController extends Controller
      * Centralized relationship tree reflecting the normalized architecture:
      * InsuranceApplication -> DamageReport -> Claim
      */
-    private function claimRelations(): array
-    {
-        return [
-            'damageReport',
-            'damageReport.insuranceApplication',
-            'damageReport.insuranceApplication.farm.farmerProfile.user',
-            'damageReport.insuranceApplication.season',
-        ];
-    }
+   private function claimRelations(): array
+{
+    return [
+        'damageReport',
+        'damageReport.insuranceApplication',
+        'damageReport.insuranceApplication.farm.farmerProfile.user.barangay', // <-- Updated here
+        'damageReport.insuranceApplication.season',
+    ];
+}
 
     /**
      * Farmer Mobile/Web: View own claims dynamically filtered by farmer profile
@@ -335,4 +335,6 @@ class ClaimController extends Controller
             'claim'   => $claim->load($this->claimRelations()),
         ]);
     }
+
+    
 }

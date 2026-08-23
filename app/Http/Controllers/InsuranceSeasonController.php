@@ -129,8 +129,8 @@ class InsuranceSeasonController extends Controller
     }
 
     public function show($id)
-    {
-        return InsuranceSeason::with('applications.farm.farmerProfile.user')
-            ->findOrFail($id);
-    }
+{
+    return InsuranceSeason::with('applications.farm.farmerProfile.user.barangay')
+        ->findOrFail($id);
+}
 }
