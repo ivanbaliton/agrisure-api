@@ -256,7 +256,7 @@ class ClaimController extends Controller
         }
 
         $eligibleIds = Claim::whereIn('id', $request->claim_ids)
-            ->where('status', 'ready_for_claiming')
+            ->where('status', 'in_pcic_processing')
             ->pluck('id');
 
         $skippedIds = collect($request->claim_ids)->diff($eligibleIds)->values();
