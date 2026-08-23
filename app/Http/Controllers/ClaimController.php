@@ -13,15 +13,15 @@ class ClaimController extends Controller
      * Centralized relationship tree reflecting the normalized architecture:
      * InsuranceApplication -> DamageReport -> Claim
      */
-   private function claimRelations(): array
-{
-    return [
-        'damageReport',
-        'damageReport.insuranceApplication',
-        'damageReport.insuranceApplication.farm.farmerProfile.user.barangay', // <-- Updated here
-        'damageReport.insuranceApplication.season',
-    ];
-}
+    private function claimRelations(): array
+    {
+        return [
+            'damageReport',
+            'damageReport.insuranceApplication',
+            'damageReport.insuranceApplication.farm.farmerProfile.user.barangay',
+            'damageReport.insuranceApplication.season',
+        ];
+    }
 
     /**
      * Farmer Mobile/Web: View own claims dynamically filtered by farmer profile
@@ -104,7 +104,7 @@ class ClaimController extends Controller
             ], 422);
         }
 
-        // 1. Look up exact Claim ID first to avoid grabbing pre-existing filled claims
+        // 1. Look up exact Claim ID first
         $claim = Claim::with($this->claimRelations())->find($id);
 
         // 2. Fall back to matching pending_filing claims via damage_report_id if claim ID isn't provided
@@ -166,7 +166,7 @@ class ClaimController extends Controller
             'cost_others'                 => $costOthers,
             'total_production_cost'       => $totalProductionCost,
             'claim_filed_date'            => now()->toDateString(),
-            'status'                      => 'under_mao_review', // Auto-transition
+            'status'                      => 'under_mao_review',
         ]);
 
         return response()->json([
@@ -196,10 +196,6 @@ class ClaimController extends Controller
 
     /**
      * MAO Action: Process and save final insurance results from PCIC.
-     * Schedule/venue are NOT set here anymore — MAO assigns those later,
-     * in bulk, via bulkSetSchedule() after selecting approved claims
-     * with checkboxes in the panel.
-     *
      * Automatically transitions status to 'ready_for_claiming' or 'pcic_rejected'
      */
     public function updatePcicResult(Request $request, $id)
@@ -222,7 +218,7 @@ class ClaimController extends Controller
             $claim->update([
                 'pcic_remarks' => $request->pcic_remarks,
                 'pcic_status'  => 'approved',
-                'status'       => 'ready_for_claiming', // Auto-transition
+                'status'       => 'ready_for_claiming',
             ]);
         } else {
             $claim->update([
@@ -230,7 +226,7 @@ class ClaimController extends Controller
                 'claim_venue'    => null,
                 'pcic_remarks'   => $request->pcic_remarks,
                 'pcic_status'    => 'rejected',
-                'status'         => 'pcic_rejected', // Auto-transition
+                'status'         => 'pcic_rejected',
             ]);
         }
 
@@ -242,13 +238,6 @@ class ClaimController extends Controller
 
     /**
      * MAO Panel: Bulk-assign ONE claiming date + venue to MULTIPLE claims
-     * at once. Flow: MAO checks several claims in a table -> clicks
-     * "Set Claiming Schedule" -> modal collects date + venue -> this
-     * endpoint applies it to every checked claim ID.
-     *
-     * Only claims currently in 'ready_for_claiming' (i.e. PCIC-approved,
-     * awaiting a schedule) are eligible; others are silently skipped
-     * and reported back so the UI can flag them.
      */
     public function bulkSetSchedule(Request $request)
     {
@@ -306,7 +295,7 @@ class ClaimController extends Controller
 
         $claim->update([
             'claimed_at' => now(),
-            'status'     => 'claimed', // Auto-transition
+            'status'     => 'claimed',
         ]);
 
         return response()->json([
@@ -335,6 +324,4 @@ class ClaimController extends Controller
             'claim'   => $claim->load($this->claimRelations()),
         ]);
     }
-
-    
 }
