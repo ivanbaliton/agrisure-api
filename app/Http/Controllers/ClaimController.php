@@ -239,6 +239,12 @@ class ClaimController extends Controller
     /**
      * MAO Panel: Bulk-assign ONE claiming date + venue to MULTIPLE claims
      */
+    /**
+     * MAO Panel: Bulk-assign ONE claiming date + venue to MULTIPLE claims
+     */
+ /**
+     * MAO Panel: Bulk-assign ONE claiming date + venue to MULTIPLE claims
+     */
     public function bulkSetSchedule(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -255,8 +261,9 @@ class ClaimController extends Controller
             ], 422);
         }
 
+        // Allow both 'ready_for_claiming' and 'in_pcic_processing' statuses
         $eligibleIds = Claim::whereIn('id', $request->claim_ids)
-            ->where('status', 'in_pcic_processing')
+            ->whereIn('status', ['ready_for_claiming', 'in_pcic_processing'])
             ->pluck('id');
 
         $skippedIds = collect($request->claim_ids)->diff($eligibleIds)->values();
@@ -268,9 +275,11 @@ class ClaimController extends Controller
             ], 422);
         }
 
+        // Update schedule, venue, and change status to ready_for_claiming
         Claim::whereIn('id', $eligibleIds)->update([
             'claim_schedule' => $request->claim_schedule,
             'claim_venue'    => $request->claim_venue,
+            'status'         => 'ready_for_claiming',
         ]);
 
         $updatedClaims = Claim::with($this->claimRelations())
