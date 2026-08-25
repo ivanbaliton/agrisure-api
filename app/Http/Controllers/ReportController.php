@@ -2646,4 +2646,220 @@ public function farms(Request $request)
                 ]),
         ]);
     }
+
+    /**
+     * ============================================================
+     * BARANGAY SUPPLIES DISTRIBUTED REPORT
+     *
+     * A simplified, barangay-scoped report showing total supplies
+     * distributed and a breakdown per supply type (e.g. Fertilizer,
+     * Rice Seeds).
+     *
+     * Filters:
+     * - Year
+     * - Date From / Date To
+     *
+     * SECURITY NOTE: barangay_id is taken from the authenticated
+     * user, never from the request, so a barangay account can
+     * only ever see its own numbers. This differs from the other
+     * methods above, which trust $request->barangay_id because
+     * they're only reachable by MAO admin routes.
+     * ============================================================
+     */
+    public function barangaySuppliesDistributed(Request $request)
+    {
+        // ASSUMPTION: barangay users have barangay_id directly on
+        // the users table. If it actually lives on a related
+        // model (e.g. a barangayOfficial profile), change this
+        // one line.
+        $barangayId = auth()->user()->barangay_id;
+
+        $filters = [
+            'year'      => $request->year,
+            'date_from' => $request->date_from,
+            'date_to'   => $request->date_to,
+        ];
+
+        /*
+         * Base query: distribution_list_items scoped to this
+         * barangay's distribution lists only.
+         */
+        $baseQuery = DB::table('distribution_list_items')
+            ->join(
+                'distribution_lists',
+                'distribution_lists.id',
+                '=',
+                'distribution_list_items.distribution_list_id'
+            )
+            ->join(
+                'distribution_events',
+                'distribution_events.id',
+                '=',
+                'distribution_lists.distribution_event_id'
+            )
+            ->where('distribution_lists.barangay_id', $barangayId)
+            ->when($filters['year'], function ($q) use ($filters) {
+                $q->whereYear(
+                    'distribution_events.distribution_date',
+                    $filters['year']
+                );
+            })
+            ->when($filters['date_from'], function ($q) use ($filters) {
+                $q->whereDate(
+                    'distribution_events.distribution_date',
+                    '>=',
+                    $filters['date_from']
+                );
+            })
+            ->when($filters['date_to'], function ($q) use ($filters) {
+                $q->whereDate(
+                    'distribution_events.distribution_date',
+                    '<=',
+                    $filters['date_to']
+                );
+            });
+
+        /*
+         * Total quantity distributed, across all supply types.
+         */
+        $totalDistributed = (clone $baseQuery)
+            ->sum('distribution_list_items.quantity');
+
+        /*
+         * Total number of distribution events (lists) this
+         * barangay has received.
+         */
+        $totalEvents = (clone $baseQuery)
+            ->distinct('distribution_lists.id')
+            ->count('distribution_lists.id');
+
+        /*
+         * Total distinct beneficiary farmers served.
+         */
+        $totalBeneficiaries = DB::table('distribution_list_farmers')
+            ->join(
+                'distribution_lists',
+                'distribution_lists.id',
+                '=',
+                'distribution_list_farmers.distribution_list_id'
+            )
+            ->join(
+                'distribution_events',
+                'distribution_events.id',
+                '=',
+                'distribution_lists.distribution_event_id'
+            )
+            ->where('distribution_lists.barangay_id', $barangayId)
+            ->when($filters['year'], function ($q) use ($filters) {
+                $q->whereYear(
+                    'distribution_events.distribution_date',
+                    $filters['year']
+                );
+            })
+            ->when($filters['date_from'], function ($q) use ($filters) {
+                $q->whereDate(
+                    'distribution_events.distribution_date',
+                    '>=',
+                    $filters['date_from']
+                );
+            })
+            ->when($filters['date_to'], function ($q) use ($filters) {
+                $q->whereDate(
+                    'distribution_events.distribution_date',
+                    '<=',
+                    $filters['date_to']
+                );
+            })
+            ->distinct('farmer_id')
+            ->count('farmer_id');
+
+        /*
+         * Per-supply breakdown, e.g.:
+         * Fertilizer - 500 kg
+         * Rice Seeds - 200 kg
+         */
+        $bySupply = InventorySupply::select(
+                'inventory_supplies.id',
+                'inventory_supplies.name as supply_name',
+                'inventory_supplies.unit',
+                DB::raw(
+                    'SUM(distribution_list_items.quantity) as total_quantity'
+                )
+            )
+            ->join(
+                'distribution_list_items',
+                'inventory_supplies.id',
+                '=',
+                'distribution_list_items.supply_id'
+            )
+            ->join(
+                'distribution_lists',
+                'distribution_lists.id',
+                '=',
+                'distribution_list_items.distribution_list_id'
+            )
+            ->join(
+                'distribution_events',
+                'distribution_events.id',
+                '=',
+                'distribution_lists.distribution_event_id'
+            )
+            ->where('distribution_lists.barangay_id', $barangayId)
+            ->when($filters['year'], function ($q) use ($filters) {
+                $q->whereYear(
+                    'distribution_events.distribution_date',
+                    $filters['year']
+                );
+            })
+            ->when($filters['date_from'], function ($q) use ($filters) {
+                $q->whereDate(
+                    'distribution_events.distribution_date',
+                    '>=',
+                    $filters['date_from']
+                );
+            })
+            ->when($filters['date_to'], function ($q) use ($filters) {
+                $q->whereDate(
+                    'distribution_events.distribution_date',
+                    '<=',
+                    $filters['date_to']
+                );
+            })
+            ->groupBy(
+                'inventory_supplies.id',
+                'inventory_supplies.name',
+                'inventory_supplies.unit'
+            )
+            ->orderByDesc('total_quantity')
+            ->get();
+
+        /*
+         * Monthly trend of total quantity distributed, useful
+         * for a simple bar/line chart.
+         */
+        $monthly = (clone $baseQuery)
+            ->selectRaw(
+                'MONTH(distribution_events.distribution_date) as month,
+                SUM(distribution_list_items.quantity) as total_quantity'
+            )
+            ->groupByRaw(
+                'MONTH(distribution_events.distribution_date)'
+            )
+            ->orderByRaw(
+                'MONTH(distribution_events.distribution_date)'
+            )
+            ->get();
+
+        return response()->json([
+            'summary' => [
+                'total_distributed'   => (float) $totalDistributed,
+                'total_events'        => $totalEvents,
+                'total_beneficiaries' => $totalBeneficiaries,
+            ],
+
+            'by_supply' => $bySupply,
+
+            'monthly_distribution' => $monthly,
+        ]);
+    }
 }
