@@ -14,9 +14,11 @@ class RoleMiddleware
         string $role
     ): Response {
 
+        $allowedRoles = explode(',', $role);
+
         if (
             !$request->user() ||
-            $request->user()->role !== $role
+            !in_array($request->user()->role, $allowedRoles, true)
         ) {
             return response()->json([
                 'message' => 'Unauthorized.'
