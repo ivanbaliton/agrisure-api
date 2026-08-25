@@ -301,36 +301,24 @@ Route::middleware('auth:sanctum')->group(function () {
 
 use App\Http\Controllers\ReportController;
 
-Route::prefix('reports')->group(function () {
-
-    // Overview Dashboard
+// MAO-admin-only reports — trust $request->barangay_id, so they must
+// never be reachable by a barangay-role account
+Route::middleware(['auth:sanctum', 'role:mao'])->prefix('reports')->group(function () {
     Route::get('/overview', [ReportController::class, 'overview']);
-
-    // Farmers Reports
     Route::get('/farmers', [ReportController::class, 'farmers']);
-
-    // Farms & Crops Reports
     Route::get('/farms', [ReportController::class, 'farms']);
-
-    // Insurance Reports
     Route::get('/insurance', [ReportController::class, 'insurance']);
-
-    // Damage Reports
     Route::get('/damage-reports', [ReportController::class, 'damageReports']);
-
-    // Claims Reports
     Route::get('/claims', [ReportController::class, 'claims']);
-
-    // Distribution Reports
     Route::get('/distribution', [ReportController::class, 'distribution']);
-
-    // Inventory Reports
     Route::get('/inventory', [ReportController::class, 'inventory']);
-
-    // Executive Insights
     Route::get('/executive', [ReportController::class, 'executive']);
-    Route::get('/supplies-distributed', [ReportController::class, 'barangaySuppliesDistributed']);
+});
 
+// Barangay-scoped report — derives barangay_id from auth(), safe for
+// barangay-role accounts specifically
+Route::middleware(['auth:sanctum', 'role:barangay'])->prefix('reports')->group(function () {
+    Route::get('/supplies-distributed', [ReportController::class, 'barangaySuppliesDistributed']);
 });
 
 
