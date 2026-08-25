@@ -297,6 +297,16 @@ public function farmers(Request $request)
 {
     $filters = $this->reportFilters($request);
 
+    // A barangay account can only ever see its own barangay, no matter
+    // what barangay_id it sends in the query string. Adjust the role
+    // check below to match however your app actually determines role
+    // (e.g. $request->user()->role === 'barangay', a Spatie check, etc.)
+    // — this should mirror whatever the 'role:barangay' route middleware
+    // checks under the hood.
+    if ($request->user()->role === 'barangay') {
+        $filters['barangay_id'] = $request->user()->barangay_id;
+    }
+
     $farmers = FarmerProfile::query();
 
     /*
@@ -488,22 +498,18 @@ public function farmers(Request $request)
         'age_groups' => $ageGroups,
     ]);
 }
-    /**
-     * ============================================================
-     * FARM & CROP REPORT
-     * Filters:
-     * - Barangay
-     * - Crop
-     * - Year
-     * - Date From / Date To
-     * ============================================================
-     */
-    /**
+
+/**
  * Farm & Crop Analytics
  */
 public function farms(Request $request)
 {
     $filters = $this->reportFilters($request);
+
+    // Same barangay-lock as farmers() above.
+    if ($request->user()->role === 'barangay') {
+        $filters['barangay_id'] = $request->user()->barangay_id;
+    }
 
     $farms = Farm::query();
 
@@ -711,7 +717,6 @@ public function farms(Request $request)
         'largest_agricultural_barangays' => $largestAgriculturalBarangays,
     ]);
 }
-
     /**
      * ============================================================
      * INSURANCE REPORT

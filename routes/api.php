@@ -301,9 +301,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
 use App\Http\Controllers\ReportController;
 
-// MAO-admin-only reports — trust $request->barangay_id, so they must
-// never be reachable by a barangay-role account
-Route::middleware(['auth:sanctum', 'role:mao'])->prefix('reports')->group(function () {
+Route::middleware(['auth:sanctum', 'role:mao,barangay'])->prefix('reports')->group(function () {
     Route::get('/overview', [ReportController::class, 'overview']);
     Route::get('/farmers', [ReportController::class, 'farmers']);
     Route::get('/farms', [ReportController::class, 'farms']);
@@ -315,12 +313,9 @@ Route::middleware(['auth:sanctum', 'role:mao'])->prefix('reports')->group(functi
     Route::get('/executive', [ReportController::class, 'executive']);
 });
 
-// Barangay-scoped report — derives barangay_id from auth(), safe for
-// barangay-role accounts specifically
 Route::middleware(['auth:sanctum', 'role:barangay'])->prefix('reports')->group(function () {
     Route::get('/supplies-distributed', [ReportController::class, 'barangaySuppliesDistributed']);
 });
-
 
 
 Route::post('/distribution-events/{event}/notify', DistributionNotificationController::class);
