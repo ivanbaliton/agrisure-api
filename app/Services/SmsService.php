@@ -9,12 +9,17 @@ class SmsService
 {
     public function sendOtp(string $phoneNumber, string $otpCode): array
     {
+        return $this->sendMessage($phoneNumber, "Your AgriSure OTP is {$otpCode}. This code is valid for 3 minutes.");
+    }
+
+    public function sendMessage(string $phoneNumber, string $message): array
+    {
         $response = Http::withoutVerifying()
             ->asForm()
             ->post('https://semaphore.co/api/v4/messages', [
                 'apikey' => config('services.semaphore.api_key'),
                 'number' => $phoneNumber,
-                'message' => "Your AgriSure OTP is {$otpCode}. This code is valid for 5 minutes.",
+                'message' => $message,
                 'sendername' => config('services.semaphore.sender_name'),
             ]);
 

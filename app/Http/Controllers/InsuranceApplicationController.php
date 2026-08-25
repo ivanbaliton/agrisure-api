@@ -9,6 +9,11 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use App\Notifications\ApplicationForwardedToPcicNotification;
 use Illuminate\Support\Facades\Log;
+use App\Mail\ApplicationForwardedToPcicMail;
+use App\Services\NotificationService;
+use App\Services\SmsService;
+
+use Illuminate\Support\Facades\Mail;
 
 class InsuranceApplicationController extends Controller
 {
@@ -427,6 +432,8 @@ class InsuranceApplicationController extends Controller
      */
     
 
+
+
 public function submitToPcic($id)
 {
     $application = InsuranceApplication::with([
@@ -450,24 +457,41 @@ public function submitToPcic($id)
         'status' => 'submitted_to_pcic',
     ]);
 
-    // 2. Dispatch Notifications Safely
-    try {
-        $user = $application->farm?->farmerProfile?->user;
+    // 2. Resolve User
+    $user = $application->farm?->farmerProfile?->user;
 
-        if ($user) {
-            $notification = new ApplicationForwardedToPcicNotification($application);
-            
-            // Sends In-App Database & Mail
-            $user->notify($notification);
+    if ($user) {
+        $title = 'Application Forwarded to PCIC';
+        $farmName = $application->farm->farm_name ?? 'your farm';
+        $messageText = "Your crop insurance application for {$farmName} (ID: #{$application->id}) has been forwarded to PCIC.";
 
-            // Sends SMS & FCM Push
-            if (method_exists($notification, 'sendCustomAlerts')) {
-                $notification->sendCustomAlerts($user);
+        // A. In-App Database Record & FCM Push (via your NotificationService)
+        try {
+            NotificationService::send($user->id, $title, $messageText);
+        } catch (\Throwable $e) {
+            Log::error('In-App/Push notification failed for User #' . $user->id . ': ' . $e->getMessage());
+        }
+
+        // B. SMS Notification (via your SmsService & Semaphore)
+        if (!empty($user->phone_number)) {
+            try {
+                $smsService = new SmsService();
+                $smsService->sendMessage($user->phone_number, "AgriSure: {$messageText}");
+            } catch (\Throwable $e) {
+                Log::error('SMS notification failed for User #' . $user->id . ': ' . $e->getMessage());
             }
         }
-    } catch (\Throwable $e) {
-        // Log the error without interrupting the API response
-        Log::error('Notification dispatch failed for Application ID ' . $id . ': ' . $e->getMessage());
+
+        // C. Email Notification (via Laravel Mail)
+        if (!empty($user->email)) {
+            try {
+                Mail::to($user->email)->send(new ApplicationForwardedToPcicMail($application));
+            } catch (\Throwable $e) {
+                Log::error('Email notification failed for User #' . $user->id . ': ' . $e->getMessage());
+            }
+        }
+    } else {
+        Log::warning('No user found linked to Farm/FarmerProfile for Application #' . $id);
     }
 
     return response()->json([
@@ -475,9 +499,7 @@ public function submitToPcic($id)
         'application' => $application,
     ], 200);
 }
-    /**
-     * Optional manual override if needed (e.g., farmer presents SMS proof at MAO office).
-     */
+     
     public function approve($id)
     {
         $application = InsuranceApplication::findOrFail($id);
