@@ -329,6 +329,7 @@ Route::prefix('reports')->group(function () {
 
     // Executive Insights
     Route::get('/executive', [ReportController::class, 'executive']);
+    Route::get('/supplies-distributed', [ReportController::class, 'barangaySuppliesDistributed']);
 
 });
 
