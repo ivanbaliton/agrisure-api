@@ -7,6 +7,7 @@ use App\Models\InsuranceApplication;
 use App\Models\InsuranceSeason;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use App\Notifications\ApplicationForwardedToPcicNotification;
 
 class InsuranceApplicationController extends Controller
 {
@@ -423,32 +424,41 @@ class InsuranceApplicationController extends Controller
     /**
      * Final action by MAO when downloading/exporting forms or submitting batch to PCIC.
      */
-    public function submitToPcic($id)
-    {
-        $application = InsuranceApplication::findOrFail($id);
+    
 
-        if ($application->payment_status === 'pending_verification') {
-            return response()->json([
-                'message' => 'Payment must be verified before submitting to PCIC.',
-            ], 422);
-        }
+public function submitToPcic($id)
+{
+    $application = InsuranceApplication::with(['farm.farmerProfile.user'])->findOrFail($id);
 
-        if ($application->payment_status === 'rejected') {
-            return response()->json([
-                'message' => 'Payment proof was rejected. Application cannot be submitted to PCIC.',
-            ], 422);
-        }
-
-        $application->update([
-            'status' => 'submitted_to_pcic',
-        ]);
-
+    if ($application->payment_status === 'pending_verification') {
         return response()->json([
-            'message' => 'Application status updated to Endorsed/Submitted to PCIC.',
-            'application' => $application,
-        ]);
+            'message' => 'Payment must be verified before submitting to PCIC.',
+        ], 422);
     }
 
+    if ($application->payment_status === 'rejected') {
+        return response()->json([
+            'message' => 'Payment proof was rejected. Application cannot be submitted to PCIC.',
+        ], 422);
+    }
+
+    $application->update([
+        'status' => 'submitted_to_pcic',
+    ]);
+
+    // Send In-App, Email, SMS, and Push Notifications
+    $user = $application->farm?->farmerProfile?->user;
+    if ($user) {
+        $notification = new ApplicationForwardedToPcicNotification($application);
+        $user->notify($notification);
+        $notification->sendCustomAlerts($user);
+    }
+
+    return response()->json([
+        'message' => 'Application status updated to Endorsed/Submitted to PCIC.',
+        'application' => $application,
+    ]);
+}
     /**
      * Optional manual override if needed (e.g., farmer presents SMS proof at MAO office).
      */
@@ -639,4 +649,6 @@ class InsuranceApplicationController extends Controller
             'application' => $application,
         ]);
     }
+
+    
 }
