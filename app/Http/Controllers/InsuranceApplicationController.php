@@ -8,6 +8,7 @@ use App\Models\InsuranceSeason;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use App\Notifications\ApplicationForwardedToPcicNotification;
+use Illuminate\Support\Facades\Log;
 
 class InsuranceApplicationController extends Controller
 {
@@ -428,7 +429,9 @@ class InsuranceApplicationController extends Controller
 
 public function submitToPcic($id)
 {
-    $application = InsuranceApplication::with(['farm.farmerProfile.user'])->findOrFail($id);
+    $application = InsuranceApplication::with([
+        'farm.farmerProfile.user'
+    ])->findOrFail($id);
 
     if ($application->payment_status === 'pending_verification') {
         return response()->json([
@@ -442,22 +445,35 @@ public function submitToPcic($id)
         ], 422);
     }
 
+    // 1. Update status
     $application->update([
         'status' => 'submitted_to_pcic',
     ]);
 
-    // Send In-App, Email, SMS, and Push Notifications
-    $user = $application->farm?->farmerProfile?->user;
-    if ($user) {
-        $notification = new ApplicationForwardedToPcicNotification($application);
-        $user->notify($notification);
-        $notification->sendCustomAlerts($user);
+    // 2. Dispatch Notifications Safely
+    try {
+        $user = $application->farm?->farmerProfile?->user;
+
+        if ($user) {
+            $notification = new ApplicationForwardedToPcicNotification($application);
+            
+            // Sends In-App Database & Mail
+            $user->notify($notification);
+
+            // Sends SMS & FCM Push
+            if (method_exists($notification, 'sendCustomAlerts')) {
+                $notification->sendCustomAlerts($user);
+            }
+        }
+    } catch (\Throwable $e) {
+        // Log the error without interrupting the API response
+        Log::error('Notification dispatch failed for Application ID ' . $id . ': ' . $e->getMessage());
     }
 
     return response()->json([
         'message' => 'Application status updated to Endorsed/Submitted to PCIC.',
         'application' => $application,
-    ]);
+    ], 200);
 }
     /**
      * Optional manual override if needed (e.g., farmer presents SMS proof at MAO office).
