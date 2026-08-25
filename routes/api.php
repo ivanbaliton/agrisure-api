@@ -299,23 +299,29 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 
 use App\Http\Controllers\ReportController;
-Route::middleware(['auth:sanctum', 'role:mao'])->prefix('reports')->group(function () {
-    Route::get('/overview', [ReportController::class, 'overview']);
-    Route::get('/insurance', [ReportController::class, 'insurance']);
-    Route::get('/damage-reports', [ReportController::class, 'damageReports']);
-    Route::get('/claims', [ReportController::class, 'claims']);
-    Route::get('/distribution', [ReportController::class, 'distribution']);
-    Route::get('/inventory', [ReportController::class, 'inventory']);
-    Route::get('/executive', [ReportController::class, 'executive']);
-});
 
-Route::middleware(['auth:sanctum', 'role:mao,barangay'])->prefix('reports')->group(function () {
-    Route::get('/farmers', [ReportController::class, 'farmers']);
-    Route::get('/farms', [ReportController::class, 'farms']);
-});
+Route::middleware('auth:sanctum')->prefix('reports')->group(function () {
+    // Routes allowed for both MAO and Barangay
+    Route::middleware('role:mao,barangay')->group(function () {
+        Route::get('/farmers', [ReportController::class, 'farmers']);
+        Route::get('/farms', [ReportController::class, 'farms']);
+    });
 
-Route::middleware(['auth:sanctum', 'role:barangay'])->prefix('reports')->group(function () {
-    Route::get('/supplies-distributed', [ReportController::class, 'barangaySuppliesDistributed']);
+    // MAO-only routes
+    Route::middleware('role:mao')->group(function () {
+        Route::get('/overview', [ReportController::class, 'overview']);
+        Route::get('/insurance', [ReportController::class, 'insurance']);
+        Route::get('/damage-reports', [ReportController::class, 'damageReports']);
+        Route::get('/claims', [ReportController::class, 'claims']);
+        Route::get('/distribution', [ReportController::class, 'distribution']);
+        Route::get('/inventory', [ReportController::class, 'inventory']);
+        Route::get('/executive', [ReportController::class, 'executive']);
+    });
+
+    // Barangay-only routes
+    Route::middleware('role:barangay')->group(function () {
+        Route::get('/supplies-distributed', [ReportController::class, 'barangaySuppliesDistributed']);
+    });
 });
 
 Route::post('/distribution-events/{event}/notify', DistributionNotificationController::class);
