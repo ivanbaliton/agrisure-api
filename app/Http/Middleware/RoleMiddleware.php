@@ -11,10 +11,14 @@ class RoleMiddleware
     public function handle(
         Request $request,
         Closure $next,
-        string $role
+        string ...$roles
     ): Response {
 
-        $allowedRoles = explode(',', $role);
+        // Flatten any comma-separated strings into a single array of allowed roles
+        $allowedRoles = [];
+        foreach ($roles as $role) {
+            $allowedRoles = array_merge($allowedRoles, explode(',', $role));
+        }
 
         if (
             !$request->user() ||
