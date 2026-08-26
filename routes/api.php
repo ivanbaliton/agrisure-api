@@ -28,20 +28,29 @@ Route::post('/otp/resend', [LoginController::class, 'resendOtp'])
 
 
 
-// Route::get('/storage/signatures/{filename}', function ($filename) {
-//     $path = 'signatures/' . $filename;
+Route::options('/storage/signatures/{filename}', function () {
+    return response('', 200)
+        ->header('Access-Control-Allow-Origin', '*')
+        ->header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+});
 
-//     if (!Storage::disk('public')->exists($path)) {
-//         abort(404);
-//     }
+Route::get('/storage/signatures/{filename}', function ($filename) {
+    $path = 'signatures/' . $filename;
 
-//     $file = Storage::disk('public')->get($path);
-//     $type = Storage::disk('public')->mimeType($path);
+    if (!Storage::disk('public')->exists($path)) {
+        return response()->json(['message' => 'Signature not found'], 404);
+    }
 
-//     return response()->json([
-//         'data' => 'data:' . $type . ';base64,' . base64_encode($file),
-//     ]);
-// });
+    $file = Storage::disk('public')->get($path);
+    $type = Storage::disk('public')->mimeType($path);
+
+    return response()->json([
+        'data' => 'data:' . $type . ';base64,' . base64_encode($file),
+    ])->header('Access-Control-Allow-Origin', '*')
+      ->header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+      ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+});
 
 
 
