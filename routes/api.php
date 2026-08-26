@@ -35,7 +35,7 @@ Route::options('/storage/signatures/{filename}', function () {
         ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
 });
 
-use Illuminate\Support\Facades\Storage;
+
 
 // Handle CORS Preflight
 Route::options('/storage/signatures/{filename}', function () {
