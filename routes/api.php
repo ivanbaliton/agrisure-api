@@ -29,7 +29,7 @@ Route::post('/otp/resend', [LoginController::class, 'resendOtp'])
 
 
 Route::get('/storage/signatures/{filename}', function ($filename) {
-    $path = 'signatures/' . $filename; // or your path in storage/app/public/signatures/
+    $path = 'signatures/' . $filename;
 
     if (!Storage::disk('public')->exists($path)) {
         abort(404);
@@ -38,10 +38,8 @@ Route::get('/storage/signatures/{filename}', function ($filename) {
     $file = Storage::disk('public')->get($path);
     $type = Storage::disk('public')->mimeType($path);
 
-    return Response::make($file, 200, [
-        'Content-Type' => $type,
-        'Access-Control-Allow-Origin' => '*',
-        'Access-Control-Allow-Methods' => 'GET, OPTIONS',
+    return response()->json([
+        'data' => 'data:' . $type . ';base64,' . base64_encode($file),
     ]);
 });
 
