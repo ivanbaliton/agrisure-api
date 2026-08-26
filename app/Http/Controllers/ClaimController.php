@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Log;
 use Barryvdh\DomPDF\Facade\Pdf;
+
 use Exception;
 
 class ClaimController extends Controller
@@ -346,12 +347,12 @@ class ClaimController extends Controller
     /**
      * Internal Helper: Sends multi-channel notifications (In-App, Push, Email, SMS)
      */
-    private function notifyClaimReadyForClaiming(mixed $claim): void
+  private function notifyClaimReadyForClaiming(mixed $claim): void
 {
-    // 1. If stdClass or integer ID was passed, convert it to an Eloquent Claim model
-    if (!$claim instanceof Claim) {
+    // 1. Re-fetch as proper Eloquent App\Models\Claim instance if passed as stdClass or ID
+    if (!$claim instanceof \App\Models\Claim) {
         $claimId = is_object($claim) ? $claim->id : $claim;
-        $claim = Claim::with($this->claimRelations())->find($claimId);
+        $claim = \App\Models\Claim::with($this->claimRelations())->find($claimId);
     }
 
     if (!$claim) {
@@ -359,9 +360,8 @@ class ClaimController extends Controller
         return;
     }
 
-    // 2. Load nested relationships safely
+    // 2. Resolve User & Farmer Profile through relationship chain
     $claim->loadMissing($this->claimRelations());
-
     $farmerProfile = $claim->damageReport?->insuranceApplication?->farm?->farmerProfile;
     $user = $farmerProfile?->user;
 
@@ -373,40 +373,46 @@ class ClaimController extends Controller
     $title = "Claim Ready for Claiming";
     $venue = $claim->claim_venue ?? 'MAO Office';
     $schedule = $claim->claim_schedule ?? 'To be announced';
-    $message = "Your indemnity claim (#{$claim->id}) is ready for claiming at {$venue}. Schedule: {$schedule}.";
+    $messageText = "Your indemnity claim (#{$claim->id}) is ready for claiming at {$venue}. Schedule: {$schedule}.";
 
-    // 3. In-App & Push Notification
+    // A. In-App Database Record & Push Notification
     try {
-        NotificationService::send($user->id, $title, $message);
-        Log::info("[Claim Notification] Push/In-App triggered for User #{$user->id}");
+        NotificationService::send($user->id, $title, $messageText);
+        Log::info("[Claim Notification] Push/In-App triggered for User ID #{$user->id}");
     } catch (\Throwable $e) {
         Log::error("[Claim Notification] Push error on Claim #{$claim->id}: " . $e->getMessage());
     }
 
-    // 4. Email Notification
-    if (!empty($user->email)) {
-        try {
-            Mail::to($user->email)->send(new ClaimReadyForClaimingMail($claim));
-            Log::info("[Claim Notification] Email dispatched to {$user->email}");
-        } catch (\Throwable $e) {
-            Log::error("[Claim Notification] Email error on Claim #{$claim->id}: " . $e->getMessage());
-        }
-    }
-
-    // 5. SMS Notification
-    $phoneNumber = $user->phone_number 
+    // B. SMS Notification (Handles both User & FarmerProfile phone fields)
+    $rawPhone = $user->phone_number 
         ?? $user->mobile_number 
         ?? $farmerProfile?->phone_number 
         ?? $farmerProfile?->mobile_number;
 
-    if (!empty($phoneNumber)) {
+    if (!empty($rawPhone)) {
+        // Strip dashes, spaces, and formatting symbols
+        $formattedPhone = preg_replace('/[^0-9]/', '', $rawPhone);
+
         try {
-            $smsText = "AgriSure: Claim #{$claim->id} is ready for claiming at {$venue} on {$schedule}.";
-            $this->smsService->sendMessage($phoneNumber, $smsText);
-            Log::info("[Claim Notification] SMS sent to {$phoneNumber}");
+            $smsResult = $this->smsService->sendMessage($formattedPhone, "AgriSure: {$messageText}");
+            Log::info("[Claim Notification] SMS dispatched to {$formattedPhone}");
         } catch (\Throwable $e) {
             Log::error("[Claim Notification] SMS error on Claim #{$claim->id}: " . $e->getMessage());
         }
+    } else {
+        Log::warning("[Claim Notification] SMS skipped for User ID #{$user->id}: No phone number found.");
+    }
+
+    // C. Email Notification
+    if (!empty($user->email)) {
+        try {
+            Mail::to($user->email)->send(new ClaimReadyForClaimingMail($claim));
+            Log::info("[Claim Notification] Email sent to {$user->email}");
+        } catch (\Throwable $e) {
+            Log::error("[Claim Notification] Email error on Claim #{$claim->id}: " . $e->getMessage());
+        }
+    } else {
+        Log::info("[Claim Notification] Email skipped for User ID #{$user->id}: Email is empty.");
     }
 }
 }
