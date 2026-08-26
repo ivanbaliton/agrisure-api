@@ -3,12 +3,26 @@
 namespace App\Http\Controllers;
 
 use App\Models\Claim;
+use App\Models\User;
+use App\Services\NotificationService;
+use App\Services\SmsService;
+use App\Mail\ClaimReadyForClaimingMail;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Exception;
 
 class ClaimController extends Controller
 {
+    protected SmsService $smsService;
+
+    public function __construct(SmsService $smsService)
+    {
+        $this->smsService = $smsService;
+    }
+
     /**
      * Centralized relationship tree reflecting the normalized architecture:
      * InsuranceApplication -> DamageReport -> Claim
@@ -220,6 +234,9 @@ class ClaimController extends Controller
                 'pcic_status'  => 'approved',
                 'status'       => 'ready_for_claiming',
             ]);
+
+            // Trigger In-App, Push, Email, and SMS Notifications
+            $this->notifyClaimReadyForClaiming($claim);
         } else {
             $claim->update([
                 'claim_schedule' => null,
@@ -237,12 +254,6 @@ class ClaimController extends Controller
     }
 
     /**
-     * MAO Panel: Bulk-assign ONE claiming date + venue to MULTIPLE claims
-     */
-    /**
-     * MAO Panel: Bulk-assign ONE claiming date + venue to MULTIPLE claims
-     */
- /**
      * MAO Panel: Bulk-assign ONE claiming date + venue to MULTIPLE claims
      */
     public function bulkSetSchedule(Request $request)
@@ -285,6 +296,11 @@ class ClaimController extends Controller
         $updatedClaims = Claim::with($this->claimRelations())
             ->whereIn('id', $eligibleIds)
             ->get();
+
+        // Send notifications for each scheduled claim
+        foreach ($updatedClaims as $claim) {
+            $this->notifyClaimReadyForClaiming($claim);
+        }
 
         return response()->json([
             'message'           => count($eligibleIds) . ' claim(s) scheduled successfully.',
@@ -332,5 +348,61 @@ class ClaimController extends Controller
             'message' => 'Resource records updated successfully.',
             'claim'   => $claim->load($this->claimRelations()),
         ]);
+    }
+
+    /**
+     * Internal Helper: Sends multi-channel notifications (In-App, Push, Email, SMS) to the associated farmer
+     */
+    private function notifyClaimReadyForClaiming(Claim $claim): void
+    {
+        $claim->loadMissing($this->claimRelations());
+
+        $user = $claim->damageReport
+            ?->insuranceApplication
+            ?->farm
+            ?->farmerProfile
+            ?->user;
+
+        if (!$user) {
+            return;
+        }
+
+        $title = "Claim Ready for Claiming";
+        $message = "Good news! Your indemnity claim (#{$claim->id}) has been approved and is ready for claiming.";
+
+        // 1. Send In-App & Push Notification via NotificationService
+        try {
+            NotificationService::send($user->id, $title, $message);
+        } catch (Exception $e) {
+            Log::error("Failed sending push/in-app notification for claim ID {$claim->id}: " . $e->getMessage());
+        }
+
+        // 2. Send Email Notification via Mail
+        if (!empty($user->email)) {
+            try {
+                Mail::to($user->email)->send(new ClaimReadyForClaimingMail($claim));
+            } catch (Exception $e) {
+                Log::error("Failed sending email notification for claim ID {$claim->id}: " . $e->getMessage());
+            }
+        }
+
+        // 3. Send SMS Notification via Semaphore
+        $phoneNumber = $user->phone_number ?? $user->mobile_number ?? null;
+
+        if (!empty($phoneNumber)) {
+            try {
+                $smsText = "AgriSure: Claim #{$claim->id} is approved and ready for claiming.";
+
+                if ($claim->claim_schedule && $claim->claim_venue) {
+                    $smsText .= " Schedule: {$claim->claim_schedule} at {$claim->claim_venue}.";
+                } else {
+                    $smsText .= " Schedule and venue will be announced soon.";
+                }
+
+                $this->smsService->sendMessage($phoneNumber, $smsText);
+            } catch (Exception $e) {
+                Log::error("Failed sending SMS notification for claim ID {$claim->id}: " . $e->getMessage());
+            }
+        }
     }
 }

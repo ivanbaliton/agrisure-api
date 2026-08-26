@@ -28,7 +28,7 @@ class ApplicationForwardedToPcicMail extends Mailable
                         <p>Hello,</p>
                         <p>Your crop insurance application for <strong>{$farmName}</strong> has been endorsed by MAO and submitted to PCIC.</p>
                         <ul>
-                            <li><strong>Application ID:</strong> #{$this->application->id}</li>
+                           
                             <li><strong>Crop Variety:</strong> {$this->application->variety}</li>
                             <li><strong>Insured Area:</strong> {$this->application->insured_area} ha</li>
                         </ul>
