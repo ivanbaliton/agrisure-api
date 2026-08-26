@@ -32,6 +32,9 @@ class ClaimController extends Controller
         return [
             'damageReport',
             'damageReport.insuranceApplication',
+            'damageReport.insuranceApplication.farm',
+            'damageReport.insuranceApplication.farm.farmerProfile',
+            'damageReport.insuranceApplication.farm.farmerProfile.user',
             'damageReport.insuranceApplication.farm.farmerProfile.user.barangay',
             'damageReport.insuranceApplication.season',
         ];
@@ -94,7 +97,6 @@ class ClaimController extends Controller
 
     /**
      * Farmer Mobile: File CAS-02 form
-     * Automatically transitions status to 'under_mao_review'
      */
     public function fileIndemnityClaim(Request $request, $id)
     {
@@ -118,10 +120,8 @@ class ClaimController extends Controller
             ], 422);
         }
 
-        // 1. Look up exact Claim ID first
         $claim = Claim::with($this->claimRelations())->find($id);
 
-        // 2. Fall back to matching pending_filing claims via damage_report_id if claim ID isn't provided
         if (!$claim) {
             $claim = Claim::with($this->claimRelations())
                 ->where('damage_report_id', $id)
@@ -158,12 +158,12 @@ class ClaimController extends Controller
             return response()->json(['message' => 'This claim is not ready to be filed yet.'], 422);
         }
 
-        $costLandPrep     = (float) $request->input('cost_land_preparation', 0);
-        $costTransplant   = (float) $request->input('cost_seedling_transplanting', 0);
-        $costSeeds        = (float) $request->input('cost_seeds', 0);
-        $costFertilizer   = (float) $request->input('cost_fertilizer', 0);
-        $costChemicals    = (float) $request->input('cost_chemicals', 0);
-        $costOthers       = (float) $request->input('cost_others', 0);
+        $costLandPrep   = (float) $request->input('cost_land_preparation', 0);
+        $costTransplant = (float) $request->input('cost_seedling_transplanting', 0);
+        $costSeeds      = (float) $request->input('cost_seeds', 0);
+        $costFertilizer = (float) $request->input('cost_fertilizer', 0);
+        $costChemicals  = (float) $request->input('cost_chemicals', 0);
+        $costOthers     = (float) $request->input('cost_others', 0);
 
         $totalProductionCost = $costLandPrep + $costTransplant + $costSeeds + $costFertilizer + $costChemicals + $costOthers;
 
@@ -191,7 +191,6 @@ class ClaimController extends Controller
 
     /**
      * MAO Action: Generating/Downloading PDF for physical submission
-     * Automatically transitions status to 'in_pcic_processing'
      */
     public function downloadCas02Pdf($id)
     {
@@ -210,7 +209,6 @@ class ClaimController extends Controller
 
     /**
      * MAO Action: Process and save final insurance results from PCIC.
-     * Automatically transitions status to 'ready_for_claiming' or 'pcic_rejected'
      */
     public function updatePcicResult(Request $request, $id)
     {
@@ -235,7 +233,6 @@ class ClaimController extends Controller
                 'status'       => 'ready_for_claiming',
             ]);
 
-            // Trigger In-App, Push, Email, and SMS Notifications
             $this->notifyClaimReadyForClaiming($claim);
         } else {
             $claim->update([
@@ -259,10 +256,10 @@ class ClaimController extends Controller
     public function bulkSetSchedule(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'claim_ids'         => 'required|array|min:1',
-            'claim_ids.*'       => 'integer|exists:claims,id',
-            'claim_schedule'    => 'required|date',
-            'claim_venue'       => 'required|string|max:255',
+            'claim_ids'      => 'required|array|min:1',
+            'claim_ids.*'    => 'integer|exists:claims,id',
+            'claim_schedule' => 'required|date',
+            'claim_venue'    => 'required|string|max:255',
         ]);
 
         if ($validator->fails()) {
@@ -272,7 +269,6 @@ class ClaimController extends Controller
             ], 422);
         }
 
-        // Allow both 'ready_for_claiming' and 'in_pcic_processing' statuses
         $eligibleIds = Claim::whereIn('id', $request->claim_ids)
             ->whereIn('status', ['ready_for_claiming', 'in_pcic_processing'])
             ->pluck('id');
@@ -286,7 +282,6 @@ class ClaimController extends Controller
             ], 422);
         }
 
-        // Update schedule, venue, and change status to ready_for_claiming
         Claim::whereIn('id', $eligibleIds)->update([
             'claim_schedule' => $request->claim_schedule,
             'claim_venue'    => $request->claim_venue,
@@ -297,7 +292,6 @@ class ClaimController extends Controller
             ->whereIn('id', $eligibleIds)
             ->get();
 
-        // Send notifications for each scheduled claim
         foreach ($updatedClaims as $claim) {
             $this->notifyClaimReadyForClaiming($claim);
         }
@@ -312,7 +306,6 @@ class ClaimController extends Controller
 
     /**
      * MAO Action: Payout release confirmation
-     * Automatically transitions status to 'claimed'
      */
     public function markClaimed($id)
     {
@@ -330,7 +323,7 @@ class ClaimController extends Controller
     }
 
     /**
-     * Fallback Resource Update: Direct column adjustments
+     * Fallback Resource Update
      */
     public function update(Request $request, $id)
     {
@@ -351,58 +344,64 @@ class ClaimController extends Controller
     }
 
     /**
-     * Internal Helper: Sends multi-channel notifications (In-App, Push, Email, SMS) to the associated farmer
+     * Internal Helper: Sends multi-channel notifications (In-App, Push, Email, SMS)
      */
     private function notifyClaimReadyForClaiming(Claim $claim): void
-{
-    $claim->loadMissing($this->claimRelations());
+    {
+        // Load nested tree explicitly
+        $claim->load($this->claimRelations());
 
-    $user = $claim->damageReport
-        ?->insuranceApplication
-        ?->farm
-        ?->farmerProfile
-        ?->user;
+        $user = $claim->damageReport
+            ?->insuranceApplication
+            ?->farm
+            ?->farmerProfile
+            ?->user;
 
-    if (!$user) {
-        return;
-    }
-
-    $title = "Claim Ready for Claiming";
-    $message = "Good news! Your indemnity claim (#{$claim->id}) has been approved and is ready for claiming.";
-
-    // 1. Send In-App & Push Notification via NotificationService
-    try {
-        NotificationService::send($user->id, $title, $message);
-    } catch (\Throwable $e) {
-        Log::error("Failed sending push/in-app notification for claim ID {$claim->id}: " . $e->getMessage());
-    }
-
-    // 2. Send Email Notification via Mail
-    if (!empty($user->email)) {
-        try {
-            Mail::to($user->email)->send(new ClaimReadyForClaimingMail($claim));
-        } catch (\Throwable $e) {
-            Log::error("Failed sending email notification for claim ID {$claim->id}: " . $e->getMessage());
+        if (!$user) {
+            Log::warning("Cannot notify farmer for Claim #{$claim->id}: User profile missing.");
+            return;
         }
-    }
 
-    // 3. Send SMS Notification via Semaphore
-    $phoneNumber = $user->phone_number ?? $user->mobile_number ?? null;
+        $title = "Claim Ready for Claiming";
+        $message = "Good news! Your indemnity claim (#{$claim->id}) has been approved and is ready for claiming.";
 
-    if (!empty($phoneNumber)) {
+        // 1. In-App & Push Notification
         try {
-            $smsText = "AgriSure: Claim #{$claim->id} is approved and ready for claiming.";
+            NotificationService::send($user->id, $title, $message);
+            Log::info("In-App/Push triggered for User ID: {$user->id}");
+        } catch (\Throwable $e) {
+            Log::error("Failed sending push/in-app notification for claim ID {$claim->id}: " . $e->getMessage());
+        }
 
-            if ($claim->claim_schedule && $claim->claim_venue) {
-                $smsText .= " Schedule: {$claim->claim_schedule} at {$claim->claim_venue}.";
-            } else {
-                $smsText .= " Schedule and venue will be announced soon.";
+        // 2. Email Notification
+        if (!empty($user->email)) {
+            try {
+                Mail::to($user->email)->send(new ClaimReadyForClaimingMail($claim));
+                Log::info("Email sent to: {$user->email}");
+            } catch (\Throwable $e) {
+                Log::error("Failed sending email notification for claim ID {$claim->id}: " . $e->getMessage());
             }
+        } else {
+            Log::warning("Skipped email for User ID {$user->id}: Email address is empty.");
+        }
 
-            $this->smsService->sendMessage($phoneNumber, $smsText);
-        } catch (\Throwable $e) {
-            Log::error("Failed sending SMS notification for claim ID {$claim->id}: " . $e->getMessage());
+        // 3. SMS Notification
+        $phoneNumber = $user->phone_number ?? $user->mobile_number ?? null;
+
+        if (!empty($phoneNumber)) {
+            try {
+                $smsText = "AgriSure: Claim #{$claim->id} is approved and ready for claiming.";
+
+                if ($claim->claim_schedule && $claim->claim_venue) {
+                    $smsText .= " Schedule: {$claim->claim_schedule} at {$claim->claim_venue}.";
+                } else {
+                    $smsText .= " Schedule and venue will be announced soon.";
+                }
+
+                $this->smsService->sendMessage($phoneNumber, $smsText);
+            } catch (\Throwable $e) {
+                Log::error("Failed sending SMS notification for claim ID {$claim->id}: " . $e->getMessage());
+            }
         }
     }
-}
 }
