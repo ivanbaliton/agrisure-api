@@ -54,7 +54,7 @@ class ApplicationForwardedToPcicNotification extends Notification
             'title' => 'Application Forwarded to PCIC',
             'message' => "Your crop insurance application for \"{$farmName}\" has been endorsed and forwarded to PCIC.",
             'application_id' => $this->application->id,
-            'farm_id' => $this->application->farm_id,
+            // 'farm_id' => $this->application->farm_id,
             'type' => 'insurance_pcic_submission',
         ];
     }
