@@ -48,7 +48,7 @@ class ClaimReadyForClaimingMail extends Mailable
                 <div style=\"font-family: sans-serif; padding: 20px; color: #0F212F;\">
                     <h2 style=\"color: #116D3E;\">Your Claim is Ready for Claiming</h2>
                     <p>Hi {$farmerName},</p>
-                    <p>Good news! Your indemnity claim (<strong>Claim #{$claim->id}</strong>) for <strong>{$farmName}</strong> ({$cropType}) has been approved by PCIC and is now ready for claiming.</p>
+                    <p>Good news! Your indemnity claim has been approved by PCIC and is now ready for claiming.</p>
                     <div style=\"background: #F1F6F2; border-radius: 8px; padding: 14px; margin: 16px 0;\">
                         <p style=\"margin: 0 0 6px 0;\"><strong>Claiming Date:</strong> {$scheduleText}</p>
                         <p style=\"margin: 0;\"><strong>Venue:</strong> {$venueText}</p>

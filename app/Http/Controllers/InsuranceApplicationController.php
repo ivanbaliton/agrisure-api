@@ -12,12 +12,55 @@ use Illuminate\Support\Facades\Log;
 use App\Mail\ApplicationForwardedToPcicMail;
 use App\Services\NotificationService;
 use App\Services\SmsService;
-
 use Illuminate\Support\Facades\Mail;
 
 class InsuranceApplicationController extends Controller
 {
     private const GEOFENCE_RADIUS_METERS = 500;
+
+    /**
+     * Reusable helper to send Push, SMS, and Email notifications safely.
+     */
+    private function sendApplicationNotifications(
+        InsuranceApplication $application,
+        string $title,
+        string $messageText,
+        bool $sendEmail = false
+    ): void {
+        $application->loadMissing('farm.farmerProfile.user');
+        $user = $application->farm?->farmerProfile?->user;
+
+        if (!$user) {
+            Log::warning("No user linked to Application #{$application->id} for notifications.");
+            return;
+        }
+
+        // 1. In-App & FCM Push Notification
+        try {
+            NotificationService::send($user->id, $title, $messageText);
+        } catch (\Throwable $e) {
+            Log::error("Push notification failed for User #{$user->id}: " . $e->getMessage());
+        }
+
+        // 2. SMS Notification
+        if (!empty($user->phone_number)) {
+            try {
+                $smsService = new SmsService();
+                $smsService->sendMessage($user->phone_number, "AgriSure: {$messageText}");
+            } catch (\Throwable $e) {
+                Log::error("SMS notification failed for User #{$user->id}: " . $e->getMessage());
+            }
+        }
+
+        // 3. Email Notification (using ApplicationForwardedToPcicMail)
+        if ($sendEmail && !empty($user->email)) {
+            try {
+                Mail::to($user->email)->send(new ApplicationForwardedToPcicMail($application));
+            } catch (\Throwable $e) {
+                Log::error("Email notification failed for User #{$user->id}: " . $e->getMessage());
+            }
+        }
+    }
 
     private function getOrCreateCurrentSeason()
     {
@@ -430,76 +473,42 @@ class InsuranceApplicationController extends Controller
     /**
      * Final action by MAO when downloading/exporting forms or submitting batch to PCIC.
      */
-    
+    public function submitToPcic($id)
+    {
+        $application = InsuranceApplication::with([
+            'farm.farmerProfile.user'
+        ])->findOrFail($id);
 
+        if ($application->payment_status === 'pending_verification') {
+            return response()->json([
+                'message' => 'Payment must be verified before submitting to PCIC.',
+            ], 422);
+        }
 
+        if ($application->payment_status === 'rejected') {
+            return response()->json([
+                'message' => 'Payment proof was rejected. Application cannot be submitted to PCIC.',
+            ], 422);
+        }
 
-public function submitToPcic($id)
-{
-    $application = InsuranceApplication::with([
-        'farm.farmerProfile.user'
-    ])->findOrFail($id);
+        // 1. Update status
+        $application->update([
+            'status' => 'submitted_to_pcic',
+        ]);
 
-    if ($application->payment_status === 'pending_verification') {
-        return response()->json([
-            'message' => 'Payment must be verified before submitting to PCIC.',
-        ], 422);
-    }
-
-    if ($application->payment_status === 'rejected') {
-        return response()->json([
-            'message' => 'Payment proof was rejected. Application cannot be submitted to PCIC.',
-        ], 422);
-    }
-
-    // 1. Update status
-    $application->update([
-        'status' => 'submitted_to_pcic',
-    ]);
-
-    // 2. Resolve User
-    $user = $application->farm?->farmerProfile?->user;
-
-    if ($user) {
-        $title = 'Application Forwarded to PCIC';
+        // 2. Dispatch Push, SMS, and Email using existing Mail class
         $farmName = $application->farm->farm_name ?? 'your farm';
+        $title = 'Application Forwarded to PCIC';
         $messageText = "Your crop insurance application for {$farmName} (ID: #{$application->id}) has been forwarded to PCIC.";
 
-        // A. In-App Database Record & FCM Push (via your NotificationService)
-        try {
-            NotificationService::send($user->id, $title, $messageText);
-        } catch (\Throwable $e) {
-            Log::error('In-App/Push notification failed for User #' . $user->id . ': ' . $e->getMessage());
-        }
+        $this->sendApplicationNotifications($application, $title, $messageText, true);
 
-        // B. SMS Notification (via your SmsService & Semaphore)
-        if (!empty($user->phone_number)) {
-            try {
-                $smsService = new SmsService();
-                $smsService->sendMessage($user->phone_number, "AgriSure: {$messageText}");
-            } catch (\Throwable $e) {
-                Log::error('SMS notification failed for User #' . $user->id . ': ' . $e->getMessage());
-            }
-        }
-
-        // C. Email Notification (via Laravel Mail)
-        if (!empty($user->email)) {
-            try {
-                Mail::to($user->email)->send(new ApplicationForwardedToPcicMail($application));
-            } catch (\Throwable $e) {
-                Log::error('Email notification failed for User #' . $user->id . ': ' . $e->getMessage());
-            }
-        }
-    } else {
-        Log::warning('No user found linked to Farm/FarmerProfile for Application #' . $id);
+        return response()->json([
+            'message' => 'Application status updated to Endorsed/Submitted to PCIC.',
+            'application' => $application,
+        ], 200);
     }
 
-    return response()->json([
-        'message' => 'Application status updated to Endorsed/Submitted to PCIC.',
-        'application' => $application,
-    ], 200);
-}
-     
     public function approve($id)
     {
         $application = InsuranceApplication::findOrFail($id);
@@ -648,31 +657,37 @@ public function submitToPcic($id)
             ->get();
     }
 
-   public function approveForPcic($id)
-{
-    $application = InsuranceApplication::findOrFail($id);
+    public function approveForPcic($id)
+    {
+        $application = InsuranceApplication::findOrFail($id);
 
-    if ($application->payment_status === 'pending_verification') {
+        if ($application->payment_status === 'pending_verification') {
+            return response()->json([
+                'message' => 'Payment must be verified before this application can proceed to PCIC.',
+            ], 422);
+        }
+
+        if ($application->payment_status === 'rejected') {
+            return response()->json([
+                'message' => 'Payment proof was rejected. Application cannot proceed to PCIC.',
+            ], 422);
+        }
+
+        $application->update([
+            'status' => 'approved_for_pcic',
+        ]);
+
+        $farmName = $application->farm->farm_name ?? 'your farm';
+        $title = 'Application Approved for PCIC';
+        $messageText = "Your insurance application for {$farmName} (ID: #{$application->id}) has been approved for PCIC submission.";
+
+        $this->sendApplicationNotifications($application, $title, $messageText, false);
+
         return response()->json([
-            'message' => 'Payment must be verified before this application can proceed to PCIC.',
-        ], 422);
+            'message' => 'Application approved for PCIC submission.',
+            'application' => $application,
+        ]);
     }
-
-    if ($application->payment_status === 'rejected') {
-        return response()->json([
-            'message' => 'Payment proof was rejected. Application cannot proceed to PCIC.',
-        ], 422);
-    }
-
-    $application->update([
-        'status' => 'approved_for_pcic',
-    ]);
-
-    return response()->json([
-        'message' => 'Application approved for PCIC submission.',
-        'application' => $application,
-    ]);
-}
 
     public function needsRevision($id)
     {
@@ -682,11 +697,15 @@ public function submitToPcic($id)
             'status' => 'needs_revision',
         ]);
 
+        $farmName = $application->farm->farm_name ?? 'your farm';
+        $title = 'Application Requires Revision';
+        $messageText = "Your insurance application for {$farmName} (ID: #{$application->id}) needs revision. Please check your documents.";
+
+        $this->sendApplicationNotifications($application, $title, $messageText, false);
+
         return response()->json([
             'message' => 'Application flagged for document revision.',
             'application' => $application,
         ]);
     }
-
-    
 }
