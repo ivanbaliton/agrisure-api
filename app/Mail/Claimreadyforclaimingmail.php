@@ -22,6 +22,11 @@ class ClaimReadyForClaimingMail extends Mailable implements ShouldQueue
 
     public function build()
     {
+        // Reload relationships when executed asynchronously by queue workers
+        $this->claim->loadMissing([
+            'damageReport.insuranceApplication.farm.farmerProfile.user'
+        ]);
+
         $application = $this->claim->damageReport?->insuranceApplication;
         $farm        = $application?->farm;
         $farmerUser  = $farm?->farmerProfile?->user;
