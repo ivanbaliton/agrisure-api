@@ -354,55 +354,55 @@ class ClaimController extends Controller
      * Internal Helper: Sends multi-channel notifications (In-App, Push, Email, SMS) to the associated farmer
      */
     private function notifyClaimReadyForClaiming(Claim $claim): void
-    {
-        $claim->loadMissing($this->claimRelations());
+{
+    $claim->loadMissing($this->claimRelations());
 
-        $user = $claim->damageReport
-            ?->insuranceApplication
-            ?->farm
-            ?->farmerProfile
-            ?->user;
+    $user = $claim->damageReport
+        ?->insuranceApplication
+        ?->farm
+        ?->farmerProfile
+        ?->user;
 
-        if (!$user) {
-            return;
-        }
+    if (!$user) {
+        return;
+    }
 
-        $title = "Claim Ready for Claiming";
-        $message = "Good news! Your indemnity claim (#{$claim->id}) has been approved and is ready for claiming.";
+    $title = "Claim Ready for Claiming";
+    $message = "Good news! Your indemnity claim (#{$claim->id}) has been approved and is ready for claiming.";
 
-        // 1. Send In-App & Push Notification via NotificationService
+    // 1. Send In-App & Push Notification via NotificationService
+    try {
+        NotificationService::send($user->id, $title, $message);
+    } catch (\Throwable $e) {
+        Log::error("Failed sending push/in-app notification for claim ID {$claim->id}: " . $e->getMessage());
+    }
+
+    // 2. Send Email Notification via Mail
+    if (!empty($user->email)) {
         try {
-            NotificationService::send($user->id, $title, $message);
-        } catch (Exception $e) {
-            Log::error("Failed sending push/in-app notification for claim ID {$claim->id}: " . $e->getMessage());
-        }
-
-        // 2. Send Email Notification via Mail
-        if (!empty($user->email)) {
-            try {
-                Mail::to($user->email)->send(new ClaimReadyForClaimingMail($claim));
-            } catch (Exception $e) {
-                Log::error("Failed sending email notification for claim ID {$claim->id}: " . $e->getMessage());
-            }
-        }
-
-        // 3. Send SMS Notification via Semaphore
-        $phoneNumber = $user->phone_number ?? $user->mobile_number ?? null;
-
-        if (!empty($phoneNumber)) {
-            try {
-                $smsText = "AgriSure: Claim #{$claim->id} is approved and ready for claiming.";
-
-                if ($claim->claim_schedule && $claim->claim_venue) {
-                    $smsText .= " Schedule: {$claim->claim_schedule} at {$claim->claim_venue}.";
-                } else {
-                    $smsText .= " Schedule and venue will be announced soon.";
-                }
-
-                $this->smsService->sendMessage($phoneNumber, $smsText);
-            } catch (Exception $e) {
-                Log::error("Failed sending SMS notification for claim ID {$claim->id}: " . $e->getMessage());
-            }
+            Mail::to($user->email)->send(new ClaimReadyForClaimingMail($claim));
+        } catch (\Throwable $e) {
+            Log::error("Failed sending email notification for claim ID {$claim->id}: " . $e->getMessage());
         }
     }
+
+    // 3. Send SMS Notification via Semaphore
+    $phoneNumber = $user->phone_number ?? $user->mobile_number ?? null;
+
+    if (!empty($phoneNumber)) {
+        try {
+            $smsText = "AgriSure: Claim #{$claim->id} is approved and ready for claiming.";
+
+            if ($claim->claim_schedule && $claim->claim_venue) {
+                $smsText .= " Schedule: {$claim->claim_schedule} at {$claim->claim_venue}.";
+            } else {
+                $smsText .= " Schedule and venue will be announced soon.";
+            }
+
+            $this->smsService->sendMessage($phoneNumber, $smsText);
+        } catch (\Throwable $e) {
+            Log::error("Failed sending SMS notification for claim ID {$claim->id}: " . $e->getMessage());
+        }
+    }
+}
 }
