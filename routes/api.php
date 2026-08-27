@@ -45,13 +45,12 @@ Route::options('/storage/signatures/{filename}', function () {
         ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
 })->where('filename', '.*');
 
-// Fetch signature as base64 JSON
+// routes/api.php
 Route::get('/storage/signatures/{filename}', function ($filename) {
     $path = 'signatures/' . $filename;
 
     if (!Storage::disk('public')->exists($path)) {
-        return response()->json(['error' => 'Signature not found'], 404)
-            ->header('Access-Control-Allow-Origin', '*');
+        return response()->json(['error' => 'Signature not found'], 404);
     }
 
     $file = Storage::disk('public')->get($path);
@@ -59,13 +58,8 @@ Route::get('/storage/signatures/{filename}', function ($filename) {
 
     return response()->json([
         'data' => 'data:' . $type . ';base64,' . base64_encode($file),
-    ])
-    ->header('Access-Control-Allow-Origin', '*')
-    ->header('Access-Control-Allow-Methods', 'GET, OPTIONS')
-    ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    ]);
 })->where('filename', '.*');
-
-
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/save-fcm-token', [NotificationController::class, 'saveFcmToken']);
