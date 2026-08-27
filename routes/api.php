@@ -46,22 +46,23 @@ Route::options('/storage/signatures/{filename}', function () {
 })->where('filename', '.*');
 
 // routes/api.php
-Route::get('/storage/signatures', function (Illuminate\Http\Request $request) {
-    $filename = $request->query('file');
+Route::get('/storage/file', function (Illuminate\Http\Request $request) {
+    $path = $request->query('path');
 
-    if (!$filename) {
-        return response()->json(['error' => 'Missing file parameter'], 422);
+    if (!$path) {
+        return response()->json(['error' => 'Missing path parameter'], 422);
     }
 
-    // basename() prevents path traversal via ../ in the query value
-    $path = 'signatures/' . basename($filename);
+    // Sanitize each path segment individually so ../ traversal can't escape the disk root
+    $segments = explode('/', $path);
+    $safePath = implode('/', array_map('basename', $segments));
 
-    if (!Storage::disk('public')->exists($path)) {
-        return response()->json(['error' => 'Signature not found'], 404);
+    if (!Storage::disk('public')->exists($safePath)) {
+        return response()->json(['error' => 'File not found'], 404);
     }
 
-    $file = Storage::disk('public')->get($path);
-    $type = Storage::disk('public')->mimeType($path);
+    $file = Storage::disk('public')->get($safePath);
+    $type = Storage::disk('public')->mimeType($safePath);
 
     return response()->json([
         'data' => 'data:' . $type . ';base64,' . base64_encode($file),
