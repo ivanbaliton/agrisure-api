@@ -46,8 +46,15 @@ Route::options('/storage/signatures/{filename}', function () {
 })->where('filename', '.*');
 
 // routes/api.php
-Route::get('/storage/signatures/{filename}', function ($filename) {
-    $path = 'signatures/' . $filename;
+Route::get('/storage/signatures', function (Illuminate\Http\Request $request) {
+    $filename = $request->query('file');
+
+    if (!$filename) {
+        return response()->json(['error' => 'Missing file parameter'], 422);
+    }
+
+    // basename() prevents path traversal via ../ in the query value
+    $path = 'signatures/' . basename($filename);
 
     if (!Storage::disk('public')->exists($path)) {
         return response()->json(['error' => 'Signature not found'], 404);
@@ -59,7 +66,7 @@ Route::get('/storage/signatures/{filename}', function ($filename) {
     return response()->json([
         'data' => 'data:' . $type . ';base64,' . base64_encode($file),
     ]);
-})->where('filename', '.*');
+});
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/save-fcm-token', [NotificationController::class, 'saveFcmToken']);
