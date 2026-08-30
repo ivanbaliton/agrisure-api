@@ -29,6 +29,7 @@ return new class extends Migration
 
             $table->string('spouse_name')->nullable();
             $table->string('parent_guardian_name')->nullable();
+            $table->string('phone_number')->nullable();
 
             // Crop Information
             $table->string('variety');

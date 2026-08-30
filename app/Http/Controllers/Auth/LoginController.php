@@ -12,7 +12,7 @@ use App\Services\SmsService;
 
 class LoginController extends Controller
 {
-    public function login(Request $request)
+    public function login(Request $request, SmsService $smsService)
     {
         $request->validate([
             'login' => 'required|string',
@@ -37,10 +37,10 @@ class LoginController extends Controller
             ], 422);
         }
 
-        return $this->sendOtp($user, $loginInput);
+        return $this->sendOtp($user, $loginInput, $smsService);
     }
 
-    public function resendOtp(Request $request)
+    public function resendOtp(Request $request, SmsService $smsService)
     {
         $request->validate([
             'user_id' => 'required|exists:users,id',
@@ -50,7 +50,7 @@ class LoginController extends Controller
 
         $loginInput = $user->email ?? $user->phone_number;
 
-        return $this->sendOtp($user, $loginInput);
+        return $this->sendOtp($user, $loginInput, $smsService);
     }
 
     public function verifyOtp(Request $request)
@@ -104,7 +104,7 @@ class LoginController extends Controller
     }
 
     // ── Private helper — invalidates old OTPs and sends a new one ──
-    private function sendOtp(User $user, string $loginInput): \Illuminate\Http\JsonResponse
+    private function sendOtp(User $user, string $loginInput, SmsService $smsService): \Illuminate\Http\JsonResponse
     {
         // Invalidate all previous unused OTPs for this user
         LoginOtp::where('user_id', $user->id)
@@ -114,6 +114,7 @@ class LoginController extends Controller
         $otpCode = (string) random_int(100000, 999999);
 
         if (filter_var($loginInput, FILTER_VALIDATE_EMAIL)) {
+
             Mail::send(
                 'emails.login-otp',
                 [
@@ -122,15 +123,17 @@ class LoginController extends Controller
                 ],
                 function ($message) use ($user) {
                     $message->to($user->email)
-                            ->subject('AgriSure Login OTP');
+                        ->subject('AgriSure Login OTP');
                 }
             );
 
             $deliveryMethod = 'email';
             $message = 'OTP sent to your email.';
+
         } else {
+
             try {
-                $smsResponse = app(SmsService::class)->sendOtp(
+                $smsResponse = $smsService->sendOtp(
                     $user->phone_number,
                     $otpCode
                 );
@@ -139,10 +142,17 @@ class LoginController extends Controller
 
                 $deliveryMethod = 'sms';
                 $message = 'OTP sent to your phone number.';
+
             } catch (\Exception $e) {
+
+                \Log::error('Semaphore SMS failed', [
+                    'user_id' => $user->id,
+                    'phone' => $user->phone_number,
+                    'error' => $e->getMessage(),
+                ]);
+
                 return response()->json([
                     'message' => 'SMS OTP is currently unavailable. Please login using your email instead.',
-                    'error' => $e->getMessage(),
                 ], 422);
             }
         }
@@ -165,7 +175,7 @@ class LoginController extends Controller
         ]);
     }
 
-    public function forgotPassword(Request $request)
+    public function forgotPassword(Request $request, SmsService $smsService)
     {
         $request->validate([
             'login' => 'required|string',
@@ -181,7 +191,7 @@ class LoginController extends Controller
             ], 404);
         }
 
-        return $this->sendOtp($user, $request->login);
+        return $this->sendOtp($user, $request->login, $smsService);
     }
 
     public function verifyForgotPasswordOtp(Request $request)

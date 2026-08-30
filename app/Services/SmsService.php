@@ -7,24 +7,35 @@ use Exception;
 
 class SmsService
 {
+    /**
+     * Send OTP SMS
+     */
     public function sendOtp(string $phoneNumber, string $otpCode): array
     {
-        return $this->sendMessage($phoneNumber, "Your AgriSure OTP is {$otpCode}. This code is valid for 3 minutes.");
+        $message = "AgriSure OTP: {$otpCode}. This code is valid for 3 minutes.";
+
+        return $this->sendMessage($phoneNumber, $message);
     }
 
+    /**
+     * Send regular SMS
+     */
     public function sendMessage(string $phoneNumber, string $message): array
     {
-        $response = Http::withoutVerifying()
-            ->asForm()
-            ->post('https://semaphore.co/api/v4/messages', [
+        $response = Http::asForm()->post(
+            'https://semaphore.co/api/v4/messages',
+            [
                 'apikey' => config('services.semaphore.api_key'),
                 'number' => $phoneNumber,
                 'message' => $message,
-                'sendername' => config('services.semaphore.sender_name'),
-            ]);
+                'sendername' => config('services.semaphore.sender_name', 'AgriSure'),
+            ]
+        );
 
-        if (!$response->successful()) {
-            throw new Exception('Semaphore SMS failed: ' . $response->body());
+        if ($response->failed()) {
+            throw new Exception(
+                'Semaphore SMS failed: ' . $response->body()
+            );
         }
 
         return $response->json();

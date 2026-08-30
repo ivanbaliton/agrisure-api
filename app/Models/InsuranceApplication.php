@@ -17,6 +17,7 @@ class InsuranceApplication extends Model
         'beneficiary_name',
         'spouse_name',
         'parent_guardian_name',
+        'phone_number',
 
         // Crop Information
         'variety',
