@@ -7,61 +7,62 @@ use App\Models\InsuranceApplication;
 use App\Models\InsuranceSeason;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
-use App\Notifications\ApplicationForwardedToPcicNotification;
 use Illuminate\Support\Facades\Log;
-use App\Mail\ApplicationForwardedToPcicMail;
 use App\Services\NotificationService;
-use App\Services\SmsService;
-use Illuminate\Support\Facades\Mail;
 
 class InsuranceApplicationController extends Controller
 {
     private const GEOFENCE_RADIUS_METERS = 500;
 
     /**
-     * Reusable helper to send Push, SMS, and Email notifications safely.
+     * Send application status notification through
+     * the AgriSure app / FCM push notification only.
+     *
+     * No SMS.
+     * No Email.
      */
-    private function sendApplicationNotifications(
+    private function sendApplicationNotification(
         InsuranceApplication $application,
         string $title,
-        string $messageText,
-        bool $sendEmail = false
+        string $messageText
     ): void {
         $application->loadMissing('farm.farmerProfile.user');
+
         $user = $application->farm?->farmerProfile?->user;
 
         if (!$user) {
-            Log::warning("No user linked to Application #{$application->id} for notifications.");
+            Log::warning(
+                "No user linked to Application #{$application->id} for notification."
+            );
+
             return;
         }
 
-        // 1. In-App & FCM Push Notification
         try {
-            NotificationService::send($user->id, $title, $messageText);
+            NotificationService::send(
+                $user->id,
+                $title,
+                $messageText
+            );
+
+            Log::info('Application push notification sent', [
+                'application_id' => $application->id,
+                'user_id' => $user->id,
+                'title' => $title,
+            ]);
+
         } catch (\Throwable $e) {
-            Log::error("Push notification failed for User #{$user->id}: " . $e->getMessage());
-        }
-
-        // 2. SMS Notification
-        if (!empty($user->phone_number)) {
-            try {
-                $smsService = new SmsService();
-                $smsService->sendMessage($user->phone_number, "AgriSure: {$messageText}");
-            } catch (\Throwable $e) {
-                Log::error("SMS notification failed for User #{$user->id}: " . $e->getMessage());
-            }
-        }
-
-        // 3. Email Notification (using ApplicationForwardedToPcicMail)
-        if ($sendEmail && !empty($user->email)) {
-            try {
-                Mail::to($user->email)->send(new ApplicationForwardedToPcicMail($application));
-            } catch (\Throwable $e) {
-                Log::error("Email notification failed for User #{$user->id}: " . $e->getMessage());
-            }
+            Log::error('Application push notification failed', [
+                'application_id' => $application->id,
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 
+    /**
+     * Get the current open insurance season.
+     */
     private function getOrCreateCurrentSeason()
     {
         $season = InsuranceSeason::where('status', 'application_open')
@@ -80,6 +81,9 @@ class InsuranceApplicationController extends Controller
         return $season;
     }
 
+    /**
+     * Submit insurance application.
+     */
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -126,6 +130,9 @@ class InsuranceApplicationController extends Controller
             ], 422);
         }
 
+        /*
+         * Prevent duplicate offline synchronization.
+         */
         if ($request->client_uuid) {
             $existingApplication = InsuranceApplication::where(
                 'client_uuid',
@@ -143,12 +150,18 @@ class InsuranceApplicationController extends Controller
         $farm = Farm::findOrFail($request->farm_id);
         $season = $this->getOrCreateCurrentSeason();
 
+        /*
+         * Check if season is still open.
+         */
         if ($season->status !== 'application_open') {
             return response()->json([
                 'message' => 'This insurance season is already closed for applications.',
             ], 422);
         }
 
+        /*
+         * Check application deadline.
+         */
         if (
             $season->deadline_date &&
             now()->toDateString() > $season->deadline_date->toDateString()
@@ -165,7 +178,14 @@ class InsuranceApplicationController extends Controller
             ]);
         }
 
-        $existingFarmApplication = InsuranceApplication::where('farm_id', $farm->id)
+        /*
+         * Prevent duplicate active applications
+         * for the same farm and season.
+         */
+        $existingFarmApplication = InsuranceApplication::where(
+            'farm_id',
+            $farm->id
+        )
             ->where('insurance_season_id', $season->id)
             ->whereIn('status', [
                 'submitted_to_mao',
@@ -192,15 +212,21 @@ class InsuranceApplicationController extends Controller
             ], 422);
         }
 
+        /*
+         * Insurance computation.
+         */
         $freeCoverageLimit = 3.00;
         $premiumRatePerHectare = 1000;
 
-        $usedFreeArea = InsuranceApplication::whereHas('farm', function ($query) use ($farm) {
-            $query->where(
-                'farmer_profile_id',
-                $farm->farmer_profile_id
-            );
-        })
+        $usedFreeArea = InsuranceApplication::whereHas(
+            'farm',
+            function ($query) use ($farm) {
+                $query->where(
+                    'farmer_profile_id',
+                    $farm->farmer_profile_id
+                );
+            }
+        )
             ->where('insurance_season_id', $season->id)
             ->whereIn('status', [
                 'submitted_to_mao',
@@ -210,13 +236,33 @@ class InsuranceApplicationController extends Controller
             ])
             ->sum('covered_free_area');
 
-        $remainingFreeArea = max(0, $freeCoverageLimit - $usedFreeArea);
-        $coveredFreeArea = min($insuredArea, $remainingFreeArea);
-        $excessArea = max(0, $insuredArea - $remainingFreeArea);
-        $premiumAmount = $excessArea * $premiumRatePerHectare;
-        $requiresPayment = $excessArea > 0;
-        $freeCoverageAfter = max(0, $remainingFreeArea - $coveredFreeArea);
+        $remainingFreeArea = max(
+            0,
+            $freeCoverageLimit - $usedFreeArea
+        );
 
+        $coveredFreeArea = min(
+            $insuredArea,
+            $remainingFreeArea
+        );
+
+        $excessArea = max(
+            0,
+            $insuredArea - $remainingFreeArea
+        );
+
+        $premiumAmount = $excessArea * $premiumRatePerHectare;
+
+        $requiresPayment = $excessArea > 0;
+
+        $freeCoverageAfter = max(
+            0,
+            $remainingFreeArea - $coveredFreeArea
+        );
+
+        /*
+         * Payment requirement.
+         */
         if (
             $requiresPayment &&
             (
@@ -239,16 +285,31 @@ class InsuranceApplicationController extends Controller
             ], 422);
         }
 
+        /*
+         * Store signature.
+         */
         $signaturePath = null;
+
         if ($request->hasFile('signature')) {
-            $signaturePath = $request->file('signature')->store('signatures', 'public');
+            $signaturePath = $request
+                ->file('signature')
+                ->store('signatures', 'public');
         }
 
+        /*
+         * Store payment proof.
+         */
         $paymentProofPath = null;
+
         if ($request->hasFile('payment_proof')) {
-            $paymentProofPath = $request->file('payment_proof')->store('payment_proofs', 'public');
+            $paymentProofPath = $request
+                ->file('payment_proof')
+                ->store('payment_proofs', 'public');
         }
 
+        /*
+         * Create application.
+         */
         $application = InsuranceApplication::create([
             'farm_id' => $farm->id,
             'insurance_season_id' => $season->id,
@@ -278,6 +339,7 @@ class InsuranceApplicationController extends Controller
 
             'application_date' => now()->toDateString(),
             'status' => 'submitted_to_mao',
+
             'signature_path' => $signaturePath,
 
             'insured_area' => $insuredArea,
@@ -287,22 +349,47 @@ class InsuranceApplicationController extends Controller
             'free_coverage_after' => $freeCoverageAfter,
             'premium_amount' => $premiumAmount,
 
-            'payment_status' => $requiresPayment ? 'pending_verification' : 'not_required',
-            'payment_method' => $requiresPayment ? 'gcash' : null,
+            'payment_status' => $requiresPayment
+                ? 'pending_verification'
+                : 'not_required',
+
+            'payment_method' => $requiresPayment
+                ? 'gcash'
+                : null,
+
             'payment_proof_path' => $paymentProofPath,
-            'gcash_reference_number' => $requiresPayment ? $request->gcash_reference_number : null,
-            'payment_submitted_at' => $requiresPayment ? now() : null,
+
+            'gcash_reference_number' => $requiresPayment
+                ? $request->gcash_reference_number
+                : null,
+
+            'payment_submitted_at' => $requiresPayment
+                ? now()
+                : null,
 
             'client_uuid' => $request->client_uuid,
             'sync_source' => $request->sync_source ?? 'online',
             'captured_at' => $request->captured_at,
         ]);
 
+        /*
+         * Notify farmer that the application was submitted to MAO.
+         */
+        $farmName = $farm->farm_name ?? 'your farm';
+
+        $this->sendApplicationNotification(
+            $application,
+            'Insurance Application Submitted',
+            "Your crop insurance application for {$farmName} (ID: #{$application->id}) has been submitted to the Municipal Agriculture Office for verification."
+        );
+
         return response()->json([
             'message' => $requiresPayment
                 ? 'Insurance application submitted. Payment proof is pending MAO verification.'
                 : 'Insurance application submitted to MAO successfully.',
+
             'application' => $application,
+
             'payment' => [
                 'requires_payment' => $requiresPayment,
                 'free_coverage_limit' => $freeCoverageLimit,
@@ -318,13 +405,18 @@ class InsuranceApplicationController extends Controller
                 'payment_method' => $application->payment_method,
                 'gcash_reference_number' => $application->gcash_reference_number,
             ],
+
             'season' => $season,
         ], 201);
     }
 
+    /**
+     * Submit planting photo.
+     */
     public function capturePlanting(Request $request, $id)
     {
-        $application = InsuranceApplication::with('farm')->findOrFail($id);
+        $application = InsuranceApplication::with('farm')
+            ->findOrFail($id);
 
         $validator = Validator::make($request->all(), [
             'planting_photo' => 'required|image|mimes:png,jpg,jpeg|max:5120',
@@ -341,19 +433,32 @@ class InsuranceApplicationController extends Controller
             ], 422);
         }
 
-        if (in_array($application->status, ['rejected', 'insured'])) {
+        if (in_array($application->status, [
+            'rejected',
+            'insured',
+        ])) {
             return response()->json([
-                'message' => 'Planting photo cannot be submitted for an application in "' . $application->status . '" status.',
+                'message' =>
+                    'Planting photo cannot be submitted for an application in "'
+                    . $application->status
+                    . '" status.',
             ], 422);
         }
 
-        $photoPath = $request->file('planting_photo')->store('planting_photos', 'public');
+        $photoPath = $request
+            ->file('planting_photo')
+            ->store('planting_photos', 'public');
 
         $distanceMeters = null;
         $isWithinGeofence = null;
 
         $farm = $application->farm;
-        if ($farm && isset($farm->latitude) && isset($farm->longitude)) {
+
+        if (
+            $farm &&
+            isset($farm->latitude) &&
+            isset($farm->longitude)
+        ) {
             $distanceMeters = $this->haversineDistanceMeters(
                 (float) $farm->latitude,
                 (float) $farm->longitude,
@@ -361,7 +466,8 @@ class InsuranceApplicationController extends Controller
                 (float) $request->longitude
             );
 
-            $isWithinGeofence = $distanceMeters <= self::GEOFENCE_RADIUS_METERS;
+            $isWithinGeofence =
+                $distanceMeters <= self::GEOFENCE_RADIUS_METERS;
         }
 
         $application->update([
@@ -369,7 +475,8 @@ class InsuranceApplicationController extends Controller
             'planting_photo_latitude' => $request->latitude,
             'planting_photo_longitude' => $request->longitude,
             'planting_photo_accuracy_meters' => $request->accuracy_meters,
-            'planting_photo_captured_at' => $request->captured_at ?? now(),
+            'planting_photo_captured_at' =>
+                $request->captured_at ?? now(),
             'is_within_geofence' => $isWithinGeofence,
             'distance_from_farm_meters' => $distanceMeters,
             'capture_status' => 'pending',
@@ -387,13 +494,17 @@ class InsuranceApplicationController extends Controller
         ]);
     }
 
+    /**
+     * Verify planting photo.
+     */
     public function verifyPlantingCapture($id)
     {
         $application = InsuranceApplication::findOrFail($id);
 
         if (!$application->planting_photo_path) {
             return response()->json([
-                'message' => 'No planting photo has been submitted for this application yet.',
+                'message' =>
+                    'No planting photo has been submitted for this application yet.',
             ], 422);
         }
 
@@ -407,13 +518,19 @@ class InsuranceApplicationController extends Controller
         ]);
     }
 
-    public function rejectPlantingCapture(Request $request, $id)
-    {
+    /**
+     * Reject planting photo.
+     */
+    public function rejectPlantingCapture(
+        Request $request,
+        $id
+    ) {
         $application = InsuranceApplication::findOrFail($id);
 
         if (!$application->planting_photo_path) {
             return response()->json([
-                'message' => 'No planting photo has been submitted for this application yet.',
+                'message' =>
+                    'No planting photo has been submitted for this application yet.',
             ], 422);
         }
 
@@ -428,6 +545,9 @@ class InsuranceApplicationController extends Controller
         ]);
     }
 
+    /**
+     * Calculate distance between two coordinates.
+     */
     private function haversineDistanceMeters(
         float $lat1,
         float $lon1,
@@ -439,15 +559,28 @@ class InsuranceApplicationController extends Controller
         $latDelta = deg2rad($lat2 - $lat1);
         $lonDelta = deg2rad($lon2 - $lon1);
 
-        $a = sin($latDelta / 2) * sin($latDelta / 2) +
-            cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
-            sin($lonDelta / 2) * sin($lonDelta / 2);
+        $a =
+            sin($latDelta / 2) *
+            sin($latDelta / 2) +
+            cos(deg2rad($lat1)) *
+            cos(deg2rad($lat2)) *
+            sin($lonDelta / 2) *
+            sin($lonDelta / 2);
 
-        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
+        $c = 2 * atan2(
+            sqrt($a),
+            sqrt(1 - $a)
+        );
 
-        return round($earthRadiusMeters * $c, 2);
+        return round(
+            $earthRadiusMeters * $c,
+            2
+        );
     }
 
+    /**
+     * Get all insurance applications.
+     */
     public function index()
     {
         return InsuranceApplication::with([
@@ -460,6 +593,9 @@ class InsuranceApplicationController extends Controller
             ->get();
     }
 
+    /**
+     * Get one insurance application.
+     */
     public function show($id)
     {
         return InsuranceApplication::with([
@@ -471,57 +607,72 @@ class InsuranceApplicationController extends Controller
     }
 
     /**
-     * Final action by MAO when downloading/exporting forms or submitting batch to PCIC.
+     * Final action by MAO when submitting application to PCIC.
      */
     public function submitToPcic($id)
     {
         $application = InsuranceApplication::with([
-            'farm.farmerProfile.user'
+            'farm.farmerProfile.user',
         ])->findOrFail($id);
 
         if ($application->payment_status === 'pending_verification') {
             return response()->json([
-                'message' => 'Payment must be verified before submitting to PCIC.',
+                'message' =>
+                    'Payment must be verified before submitting to PCIC.',
             ], 422);
         }
 
         if ($application->payment_status === 'rejected') {
             return response()->json([
-                'message' => 'Payment proof was rejected. Application cannot be submitted to PCIC.',
+                'message' =>
+                    'Payment proof was rejected. Application cannot be submitted to PCIC.',
             ], 422);
         }
 
-        // 1. Update status
+        /*
+         * Update status.
+         */
         $application->update([
             'status' => 'submitted_to_pcic',
         ]);
 
-        // 2. Dispatch Push, SMS, and Email using existing Mail class
-        $farmName = $application->farm->farm_name ?? 'your farm';
-        $title = 'Application Forwarded to PCIC';
-        $messageText = "Your crop insurance application for {$farmName} (ID: #{$application->id}) has been forwarded to PCIC.";
+        /*
+         * Notify farmer through app/push only.
+         */
+        $farmName = $application->farm->farm_name
+            ?? 'your farm';
 
-        $this->sendApplicationNotifications($application, $title, $messageText, true);
+        $this->sendApplicationNotification(
+            $application,
+            'Application Forwarded to PCIC',
+            "Your crop insurance application for {$farmName} (ID: #{$application->id}) has been forwarded to PCIC."
+        );
 
         return response()->json([
-            'message' => 'Application status updated to Endorsed/Submitted to PCIC.',
+            'message' =>
+                'Application status updated to Endorsed/Submitted to PCIC.',
             'application' => $application,
         ], 200);
     }
 
+    /**
+     * Mark application as insured.
+     */
     public function approve($id)
     {
         $application = InsuranceApplication::findOrFail($id);
 
         if ($application->payment_status === 'pending_verification') {
             return response()->json([
-                'message' => 'Payment must be verified before approving this application.',
+                'message' =>
+                    'Payment must be verified before approving this application.',
             ], 422);
         }
 
         if ($application->payment_status === 'rejected') {
             return response()->json([
-                'message' => 'Payment proof was rejected. Application cannot be approved.',
+                'message' =>
+                    'Payment proof was rejected. Application cannot be approved.',
             ], 422);
         }
 
@@ -529,14 +680,31 @@ class InsuranceApplicationController extends Controller
             'status' => 'insured',
         ]);
 
+        $farmName = $application->farm->farm_name
+            ?? 'your farm';
+
+        /*
+         * Notify farmer.
+         */
+        $this->sendApplicationNotification(
+            $application,
+            'Insurance Application Insured',
+            "Your crop insurance application for {$farmName} (ID: #{$application->id}) has been marked as insured."
+        );
+
         return response()->json([
             'message' => 'Insurance application marked as insured.',
             'application' => $application,
         ]);
     }
 
-    public function reject(Request $request, $id)
-    {
+    /**
+     * Reject insurance application.
+     */
+    public function reject(
+        Request $request,
+        $id
+    ) {
         $application = InsuranceApplication::findOrFail($id);
 
         $application->update([
@@ -544,19 +712,39 @@ class InsuranceApplicationController extends Controller
             'remarks' => $request->remarks,
         ]);
 
+        $farmName = $application->farm->farm_name
+            ?? 'your farm';
+
+        $remarks = $request->remarks
+            ? " Reason: {$request->remarks}"
+            : '';
+
+        /*
+         * Notify farmer.
+         */
+        $this->sendApplicationNotification(
+            $application,
+            'Insurance Application Rejected',
+            "Your crop insurance application for {$farmName} (ID: #{$application->id}) has been rejected.{$remarks}"
+        );
+
         return response()->json([
             'message' => 'Insurance application rejected.',
             'application' => $application,
         ]);
     }
 
+    /**
+     * Verify payment.
+     */
     public function verifyPayment($id)
     {
         $application = InsuranceApplication::findOrFail($id);
 
         if ($application->payment_status === 'not_required') {
             return response()->json([
-                'message' => 'Payment is not required for this application.',
+                'message' =>
+                    'Payment is not required for this application.',
             ], 422);
         }
 
@@ -564,19 +752,38 @@ class InsuranceApplicationController extends Controller
             'payment_status' => 'verified',
         ]);
 
+        $farmName = $application->farm->farm_name
+            ?? 'your farm';
+
+        /*
+         * Notify farmer that payment was verified.
+         */
+        $this->sendApplicationNotification(
+            $application,
+            'Payment Verified',
+            "Your payment for the crop insurance application for {$farmName} (ID: #{$application->id}) has been verified. Your application may now proceed to PCIC."
+        );
+
         return response()->json([
-            'message' => 'Payment verified successfully. Application may now proceed to PCIC.',
+            'message' =>
+                'Payment verified successfully. Application may now proceed to PCIC.',
             'application' => $application,
         ]);
     }
 
-    public function rejectPayment(Request $request, $id)
-    {
+    /**
+     * Reject payment proof.
+     */
+    public function rejectPayment(
+        Request $request,
+        $id
+    ) {
         $application = InsuranceApplication::findOrFail($id);
 
         if ($application->payment_status === 'not_required') {
             return response()->json([
-                'message' => 'Payment is not required for this application.',
+                'message' =>
+                    'Payment is not required for this application.',
             ], 422);
         }
 
@@ -585,15 +792,35 @@ class InsuranceApplicationController extends Controller
             'remarks' => $request->remarks,
         ]);
 
+        $farmName = $application->farm->farm_name
+            ?? 'your farm';
+
+        $remarks = $request->remarks
+            ? " Reason: {$request->remarks}"
+            : '';
+
+        /*
+         * Notify farmer.
+         */
+        $this->sendApplicationNotification(
+            $application,
+            'Payment Proof Rejected',
+            "Your payment proof for the crop insurance application for {$farmName} (ID: #{$application->id}) was rejected.{$remarks} Please submit a valid payment proof."
+        );
+
         return response()->json([
             'message' => 'Payment proof rejected.',
             'application' => $application,
         ]);
     }
 
+    /**
+     * Get remaining free insurance coverage.
+     */
     public function freeCoverage($user_id)
     {
         $freeCoverageLimit = 3.00;
+
         $season = $this->getOrCreateCurrentSeason();
 
         $usedFreeArea = InsuranceApplication::whereHas(
@@ -624,6 +851,9 @@ class InsuranceApplicationController extends Controller
         ]);
     }
 
+    /**
+     * Get application history for a farm.
+     */
     public function farmHistory($farm_id)
     {
         return InsuranceApplication::with([
@@ -637,9 +867,15 @@ class InsuranceApplicationController extends Controller
             ->get();
     }
 
+    /**
+     * Get application history.
+     */
     public function history()
     {
-        $currentSeason = InsuranceSeason::where('status', 'application_open')
+        $currentSeason = InsuranceSeason::where(
+            'status',
+            'application_open'
+        )
             ->where('is_default', false)
             ->latest()
             ->first();
@@ -650,26 +886,38 @@ class InsuranceApplicationController extends Controller
             'farm.farmerProfile.user',
             'season',
         ])
-            ->when($currentSeason, function ($query) use ($currentSeason) {
-                $query->where('insurance_season_id', '!=', $currentSeason->id);
-            })
+            ->when(
+                $currentSeason,
+                function ($query) use ($currentSeason) {
+                    $query->where(
+                        'insurance_season_id',
+                        '!=',
+                        $currentSeason->id
+                    );
+                }
+            )
             ->latest()
             ->get();
     }
 
+    /**
+     * Approve application for PCIC submission.
+     */
     public function approveForPcic($id)
     {
         $application = InsuranceApplication::findOrFail($id);
 
         if ($application->payment_status === 'pending_verification') {
             return response()->json([
-                'message' => 'Payment must be verified before this application can proceed to PCIC.',
+                'message' =>
+                    'Payment must be verified before this application can proceed to PCIC.',
             ], 422);
         }
 
         if ($application->payment_status === 'rejected') {
             return response()->json([
-                'message' => 'Payment proof was rejected. Application cannot proceed to PCIC.',
+                'message' =>
+                    'Payment proof was rejected. Application cannot proceed to PCIC.',
             ], 422);
         }
 
@@ -677,18 +925,28 @@ class InsuranceApplicationController extends Controller
             'status' => 'approved_for_pcic',
         ]);
 
-        $farmName = $application->farm->farm_name ?? 'your farm';
-        $title = 'Application Approved for PCIC';
-        $messageText = "Your insurance application for {$farmName} (ID: #{$application->id}) has been approved for PCIC submission.";
+        $farmName = $application->farm->farm_name
+            ?? 'your farm';
 
-        $this->sendApplicationNotifications($application, $title, $messageText, false);
+        /*
+         * Notify farmer.
+         */
+        $this->sendApplicationNotification(
+            $application,
+            'Application Approved for PCIC',
+            "Your insurance application for {$farmName} (ID: #{$application->id}) has been approved for PCIC submission."
+        );
 
         return response()->json([
-            'message' => 'Application approved for PCIC submission.',
+            'message' =>
+                'Application approved for PCIC submission.',
             'application' => $application,
         ]);
     }
 
+    /**
+     * Mark application as needing revision.
+     */
     public function needsRevision($id)
     {
         $application = InsuranceApplication::findOrFail($id);
@@ -697,15 +955,23 @@ class InsuranceApplicationController extends Controller
             'status' => 'needs_revision',
         ]);
 
-        $farmName = $application->farm->farm_name ?? 'your farm';
-        $title = 'Application Requires Revision';
-        $messageText = "Your insurance application for {$farmName} (ID: #{$application->id}) needs revision. Please check your documents.";
+        $farmName = $application->farm->farm_name
+            ?? 'your farm';
 
-        $this->sendApplicationNotifications($application, $title, $messageText, false);
+        /*
+         * Notify farmer.
+         */
+        $this->sendApplicationNotification(
+            $application,
+            'Application Requires Revision',
+            "Your insurance application for {$farmName} (ID: #{$application->id}) needs revision. Please check your application for the required corrections."
+        );
 
         return response()->json([
-            'message' => 'Application flagged for document revision.',
+            'message' =>
+                'Application flagged for document revision.',
             'application' => $application,
         ]);
     }
 }
+
