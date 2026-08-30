@@ -706,7 +706,7 @@ class ClaimController extends Controller
 
                 $smsMessage =
                     "AgriSure: Your indemnity claim "
-                    . "#{$claim->id} is ready for claiming. "
+                    . " is ready for claiming. "
                     . "Venue: "
                     . ($claim->claim_venue ?? 'MAO Office')
                     . ". Schedule: "
@@ -842,7 +842,7 @@ class ClaimController extends Controller
 
                     'message' =>
                         "Your indemnity claim "
-                        . "#{$claim->id} is now under "
+                        . "is now under "
                         . "MAO review.",
                 ];
 
@@ -854,7 +854,7 @@ class ClaimController extends Controller
 
                     'message' =>
                         "Your indemnity claim "
-                        . "#{$claim->id} has been submitted "
+                        . "has been submitted "
                         . "to PCIC for processing.",
                 ];
 
@@ -866,7 +866,7 @@ class ClaimController extends Controller
 
                     'message' =>
                         "Your indemnity claim "
-                        . "#{$claim->id} is ready for claiming. "
+                        . "is ready for claiming. "
                         . "Venue: {$venue}. "
                         . "Schedule: {$schedule}.",
                 ];
@@ -879,7 +879,7 @@ class ClaimController extends Controller
 
                     'message' =>
                         "Your indemnity claim "
-                        . "#{$claim->id} was rejected by PCIC."
+                        . "was rejected by PCIC."
                         . (
                             !empty($claim->pcic_remarks)
                                 ? " Remarks: {$claim->pcic_remarks}"
@@ -895,7 +895,7 @@ class ClaimController extends Controller
 
                     'message' =>
                         "Your indemnity claim "
-                        . "#{$claim->id} has been marked as claimed.",
+                        . "has been marked as claimed.",
                 ];
 
             case 'pending_filing':
@@ -906,7 +906,7 @@ class ClaimController extends Controller
 
                     'message' =>
                         "Your indemnity claim "
-                        . "#{$claim->id} is waiting for the "
+                        . "is waiting for the "
                         . "required claim form.",
                 ];
 
@@ -931,7 +931,7 @@ class ClaimController extends Controller
 
                     'message' =>
                         "Your indemnity claim "
-                        . "#{$claim->id} status has been updated "
+                        . "status has been updated "
                         . "to {$readableStatus}.",
                 ];
         }

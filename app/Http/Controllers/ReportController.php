@@ -15,16 +15,7 @@ use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
 {
-    /**
-     * ============================================================
-     * COMMON FILTERS
-     * ============================================================
-     *
-     * These filters are shared where appropriate.
-     *
-     * date_from / date_to:
-     * Useful for daily, weekly, monthly, or custom reports.
-     */
+
     private function reportFilters(Request $request)
     {
         return [
@@ -37,37 +28,19 @@ class ReportController extends Controller
         ];
     }
 
-    /**
-     * Apply date filters to a query using created_at.
-     */
     private function applyDateFilters($query, array $filters, $column = 'created_at')
     {
         if (!empty($filters['year'])) {
             $query->whereYear($column, $filters['year']);
         }
-
         if (!empty($filters['date_from'])) {
             $query->whereDate($column, '>=', $filters['date_from']);
         }
-
         if (!empty($filters['date_to'])) {
             $query->whereDate($column, '<=', $filters['date_to']);
         }
-
         return $query;
     }
-
-    /**
-     * ============================================================
-     * OVERVIEW REPORT
-     * Filters:
-     * - Year
-     * - Date From / Date To
-     * - Season
-     * - Barangay
-     * - Crop
-     * ============================================================
-     */
     public function overview(Request $request)
     {
         $filters = $this->reportFilters($request);
@@ -79,18 +52,12 @@ class ReportController extends Controller
         $claims = Claim::query();
         $distribution = DistributionList::query();
 
-        /*
-         * FARMERS
-         */
         if (!empty($filters['barangay_id'])) {
             $farmers->whereHas('user', function ($q) use ($filters) {
                 $q->where('barangay_id', $filters['barangay_id']);
             });
         }
 
-        /*
-         * FARMS
-         */
         if (!empty($filters['crop_type'])) {
             $farms->where('crop_type', $filters['crop_type']);
         }
@@ -101,9 +68,6 @@ class ReportController extends Controller
             });
         }
 
-        /*
-         * INSURANCE APPLICATIONS
-         */
         if (!empty($filters['season_id'])) {
             $applications->where(
                 'insurance_season_id',
@@ -134,12 +98,9 @@ class ReportController extends Controller
             $filters
         );
 
-        /*
-         * DAMAGE REPORTS
-         */
         if (!empty($filters['season_id'])) {
             $damageReports->whereHas(
-                'farm.insuranceApplication',
+                'insuranceApplication',
                 function ($q) use ($filters) {
                     $q->where(
                         'insurance_season_id',
@@ -172,12 +133,9 @@ class ReportController extends Controller
             $filters
         );
 
-        /*
-         * CLAIMS
-         */
         if (!empty($filters['season_id'])) {
             $claims->whereHas(
-                'damageReport.farm.insuranceApplication',
+                'damageReport.insuranceApplication',
                 function ($q) use ($filters) {
                     $q->where(
                         'insurance_season_id',
@@ -216,11 +174,6 @@ class ReportController extends Controller
             $filters
         );
 
-        /*
-         * DISTRIBUTION
-         *
-         * Distribution is filtered through distribution_events.
-         */
         if (!empty($filters['barangay_id'])) {
             $distribution->where(
                 'barangay_id',
@@ -280,51 +233,23 @@ class ReportController extends Controller
         ]);
     }
 
-    /**
-     * ============================================================
-     * FARMERS REPORT
-     * Filters:
-     * - Barangay
-     * - Crop
-     * - Year
-     * - Date From / Date To
-     * ============================================================
-     */
-    /**
- * Farmers Analytics
- */
+
 public function farmers(Request $request)
 {
     $filters = $this->reportFilters($request);
 
-    // A barangay account can only ever see its own barangay, no matter
-    // what barangay_id it sends in the query string. Adjust the role
-    // check below to match however your app actually determines role
-    // (e.g. $request->user()->role === 'barangay', a Spatie check, etc.)
-    // — this should mirror whatever the 'role:barangay' route middleware
-    // checks under the hood.
     if ($request->user()->role === 'barangay') {
         $filters['barangay_id'] = $request->user()->barangay_id;
     }
 
     $farmers = FarmerProfile::query();
 
-    /*
-    |--------------------------------------------------------------------------
-    | Barangay Filter
-    |--------------------------------------------------------------------------
-    */
     if ($filters['barangay_id']) {
         $farmers->whereHas('user', function ($q) use ($filters) {
             $q->where('barangay_id', $filters['barangay_id']);
         });
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Farmer Summary
-    |--------------------------------------------------------------------------
-    */
     $totalFarmers = (clone $farmers)->count();
 
     $riceFarmers = (clone $farmers)
@@ -339,27 +264,11 @@ public function farmers(Request $request)
         })
         ->count();
 
-    /*
-    |--------------------------------------------------------------------------
-    | Average Farm Size
-    |--------------------------------------------------------------------------
-    |
-    | Calculate only from farms belonging to the filtered farmers.
-    |
-    */
     $farmerIds = (clone $farmers)->pluck('id');
 
     $averageFarmSize = Farm::whereIn('farmer_profile_id', $farmerIds)
         ->avg('farm_area');
 
-    /*
-    |--------------------------------------------------------------------------
-    | Farmers Per Barangay
-    |--------------------------------------------------------------------------
-    |
-    | When a barangay is selected, return only that barangay.
-    |
-    */
     $farmersPerBarangay = Barangay::select(
             'barangays.id',
             'barangays.name',
@@ -387,11 +296,6 @@ public function farmers(Request $request)
         ->orderByDesc('total')
         ->get();
 
-    /*
-    |--------------------------------------------------------------------------
-    | Top Barangays
-    |--------------------------------------------------------------------------
-    */
     $topBarangays = Barangay::select(
             'barangays.id',
             'barangays.name',
@@ -420,11 +324,6 @@ public function farmers(Request $request)
         ->limit(10)
         ->get();
 
-    /*
-    |--------------------------------------------------------------------------
-    | Sex Distribution
-    |--------------------------------------------------------------------------
-    */
     $sexDistribution = FarmerProfile::query()
         ->select(
             'users.sex',
@@ -445,11 +344,6 @@ public function farmers(Request $request)
         ->groupBy('users.sex')
         ->get();
 
-    /*
-    |--------------------------------------------------------------------------
-    | Age Groups
-    |--------------------------------------------------------------------------
-    */
     $ageGroups = [
         '18-30' => (clone $farmers)
             ->whereRaw(
@@ -476,11 +370,6 @@ public function farmers(Request $request)
             ->count(),
     ];
 
-    /*
-    |--------------------------------------------------------------------------
-    | Response
-    |--------------------------------------------------------------------------
-    */
     return response()->json([
         'summary' => [
             'total_farmers'     => $totalFarmers,
@@ -499,9 +388,6 @@ public function farmers(Request $request)
     ]);
 }
 
-/**
- * Farm & Crop Analytics
- */
 public function farms(Request $request)
 {
     $filters = $this->reportFilters($request);
@@ -513,11 +399,6 @@ public function farms(Request $request)
 
     $farms = Farm::query();
 
-    /*
-    |--------------------------------------------------------------------------
-    | Crop Filter
-    |--------------------------------------------------------------------------
-    */
     if ($filters['crop_type']) {
         $farms->where(
             'crop_type',
@@ -525,11 +406,6 @@ public function farms(Request $request)
         );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Barangay Filter
-    |--------------------------------------------------------------------------
-    */
     if ($filters['barangay_id']) {
         $farms->whereHas(
             'farmerProfile.user',
@@ -542,11 +418,6 @@ public function farms(Request $request)
         );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Farm Summary
-    |--------------------------------------------------------------------------
-    */
     $totalFarms = (clone $farms)->count();
 
     $riceFarms = (clone $farms)
@@ -568,11 +439,6 @@ public function farms(Request $request)
     $averageFarmArea = (clone $farms)
         ->avg('farm_area');
 
-    /*
-    |--------------------------------------------------------------------------
-    | Crop Distribution
-    |--------------------------------------------------------------------------
-    */
     $cropDistribution = (clone $farms)
         ->select(
             'crop_type',
@@ -582,11 +448,7 @@ public function farms(Request $request)
         ->orderByDesc('total')
         ->get();
 
-    /*
-    |--------------------------------------------------------------------------
-    | Crop Area Distribution
-    |--------------------------------------------------------------------------
-    */
+
     $cropAreaDistribution = (clone $farms)
         ->select(
             'crop_type',
@@ -1020,7 +882,7 @@ public function farms(Request $request)
 
         if (!empty($filters['season_id'])) {
             $reports->whereHas(
-                'farm.insuranceApplication',
+                'insuranceApplication',
                 function ($q) use ($filters) {
                     $q->where(
                         'insurance_season_id',
@@ -1263,7 +1125,7 @@ public function farms(Request $request)
 
         if (!empty($filters['season_id'])) {
             $claims->whereHas(
-                'damageReport.farm.insuranceApplication',
+                'damageReport.insuranceApplication',
                 function ($q) use ($filters) {
                     $q->where(
                         'insurance_season_id',
@@ -2260,7 +2122,7 @@ public function farms(Request $request)
          */
         if (!empty($filters['season_id'])) {
             $damageReports->whereHas(
-                'farm.insuranceApplication',
+                'insuranceApplication',
                 function ($q) use ($filters) {
                     $q->where(
                         'insurance_season_id',
@@ -2304,7 +2166,7 @@ public function farms(Request $request)
          */
         if (!empty($filters['season_id'])) {
             $claims->whereHas(
-                'damageReport.farm.insuranceApplication',
+                'damageReport.insuranceApplication',
                 function ($q) use ($filters) {
                     $q->where(
                         'insurance_season_id',

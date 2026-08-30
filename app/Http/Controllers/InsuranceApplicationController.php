@@ -380,7 +380,7 @@ class InsuranceApplicationController extends Controller
         $this->sendApplicationNotification(
             $application,
             'Insurance Application Submitted',
-            "Your crop insurance application for {$farmName} (ID: #{$application->id}) has been submitted to the Municipal Agriculture Office for verification."
+            "Your crop insurance application for {$farmName} has been submitted to the Municipal Agriculture Office for verification."
         );
 
         return response()->json([
@@ -645,7 +645,7 @@ class InsuranceApplicationController extends Controller
         $this->sendApplicationNotification(
             $application,
             'Application Forwarded to PCIC',
-            "Your crop insurance application for {$farmName} (ID: #{$application->id}) has been forwarded to PCIC."
+            "Your crop insurance application for {$farmName} has been forwarded to PCIC."
         );
 
         return response()->json([
@@ -689,7 +689,7 @@ class InsuranceApplicationController extends Controller
         $this->sendApplicationNotification(
             $application,
             'Insurance Application Insured',
-            "Your crop insurance application for {$farmName} (ID: #{$application->id}) has been marked as insured."
+            "Your crop insurance application for {$farmName} has been marked as insured."
         );
 
         return response()->json([
@@ -725,7 +725,7 @@ class InsuranceApplicationController extends Controller
         $this->sendApplicationNotification(
             $application,
             'Insurance Application Rejected',
-            "Your crop insurance application for {$farmName} (ID: #{$application->id}) has been rejected.{$remarks}"
+            "Your crop insurance application for {$farmName} has been rejected.{$remarks}"
         );
 
         return response()->json([
@@ -761,7 +761,7 @@ class InsuranceApplicationController extends Controller
         $this->sendApplicationNotification(
             $application,
             'Payment Verified',
-            "Your payment for the crop insurance application for {$farmName} (ID: #{$application->id}) has been verified. Your application may now proceed to PCIC."
+            "Your payment for the crop insurance application for {$farmName} has been verified. Your application may now proceed to PCIC."
         );
 
         return response()->json([
@@ -805,7 +805,7 @@ class InsuranceApplicationController extends Controller
         $this->sendApplicationNotification(
             $application,
             'Payment Proof Rejected',
-            "Your payment proof for the crop insurance application for {$farmName} (ID: #{$application->id}) was rejected.{$remarks} Please submit a valid payment proof."
+            "Your payment proof for the crop insurance application for {$farmName} was rejected.{$remarks} Please submit a valid payment proof."
         );
 
         return response()->json([
@@ -934,7 +934,7 @@ class InsuranceApplicationController extends Controller
         $this->sendApplicationNotification(
             $application,
             'Application Approved for PCIC',
-            "Your insurance application for {$farmName} (ID: #{$application->id}) has been approved for PCIC submission."
+            "Your insurance application for {$farmName} has been approved for PCIC submission."
         );
 
         return response()->json([
@@ -964,7 +964,7 @@ class InsuranceApplicationController extends Controller
         $this->sendApplicationNotification(
             $application,
             'Application Requires Revision',
-            "Your insurance application for {$farmName} (ID: #{$application->id}) needs revision. Please check your application for the required corrections."
+            "Your insurance application for {$farmName} needs revision. Please check your application for the required corrections."
         );
 
         return response()->json([
