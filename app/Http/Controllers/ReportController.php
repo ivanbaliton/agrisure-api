@@ -172,7 +172,7 @@ class ReportController extends Controller
         $this->applyDateFilters(
             $claims,
             $filters,
-            'damage_reports.created_at'
+            'claims.created_at'
         );
 
         if (!empty($filters['barangay_id'])) {
@@ -931,7 +931,7 @@ public function farms(Request $request)
             );
         }
 
-        $this->applyDateFilters($reports, $filters, 'damage_reports.created_at');
+        $this->applyDateFilters($reports, $filters, 'damage_reports.damage_date');
 
         return response()->json([
             'summary' => [
@@ -955,14 +955,14 @@ public function farms(Request $request)
                 ->orderByDesc('total')
                 ->get(),
 
-            'monthly_damage' => (clone $reports)
-                ->selectRaw(
-                    'MONTH(created_at) as month, COUNT(*) as total'
-                )
-                ->groupByRaw('MONTH(created_at)')
-                ->orderByRaw('MONTH(created_at)')
-                ->get(),
-
+            
+'monthly_damage' => (clone $reports)
+    ->selectRaw(
+        'MONTH(damage_reports.damage_date) as month, COUNT(*) as total'
+    )
+    ->groupByRaw('MONTH(damage_reports.damage_date)')
+    ->orderByRaw('MONTH(damage_reports.damage_date)')
+    ->get(),
             'crop_damage' => (clone $reports)
                 ->join(
                     'farms',
@@ -1172,7 +1172,7 @@ public function farms(Request $request)
         $this->applyDateFilters(
             $claims,
             $filters,
-            'damage_reports.created_at'
+            'claims.created_at'
         );
 
         return response()->json([
