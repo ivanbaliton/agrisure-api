@@ -2193,10 +2193,10 @@ public function farms(Request $request)
         }
 
         $this->applyDateFilters(
-            $claims,
-            $filters,
-            'damage_reports.created_at'
-        );
+    $claims,
+    $filters,
+    'claims.created_at'
+);
 
         /*
          * DISTRIBUTION
@@ -2399,14 +2399,14 @@ public function farms(Request $request)
                     }
                 )
                 ->when(
-                    $filters['year'],
-                    function ($q) use ($filters) {
-                        $q->whereYear(
-                            'damage_reports.created_at',
-                            $filters['year']
-                        );
-                    }
-                )
+    $filters['year'],
+    function ($q) use ($filters) {
+        $q->whereYear(
+            'damage_reports.damage_date',
+            $filters['year']
+        );
+    }
+)
                 ->groupBy(
                     'barangays.id',
                     'barangays.name'
