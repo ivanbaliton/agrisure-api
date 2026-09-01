@@ -28,19 +28,19 @@ class ReportController extends Controller
         ];
     }
 
-    private function applyDateFilters($query, array $filters, $column = 'created_at')
-    {
-        if (!empty($filters['year'])) {
-            $query->whereYear($column, $filters['year']);
-        }
-        if (!empty($filters['date_from'])) {
-            $query->whereDate($column, '>=', $filters['date_from']);
-        }
-        if (!empty($filters['date_to'])) {
-            $query->whereDate($column, '<=', $filters['date_to']);
-        }
-        return $query;
+ private function applyDateFilters($query, array $filters, $column = 'created_at')
+{
+    if (!empty($filters['year'])) {
+        $query->whereYear($column, $filters['year']);
     }
+    if (!empty($filters['date_from'])) {
+        $query->whereDate($column, '>=', $filters['date_from']);
+    }
+    if (!empty($filters['date_to'])) {
+        $query->whereDate($column, '<=', $filters['date_to']);
+    }
+    return $query;
+}
     public function overview(Request $request)
     {
         $filters = $this->reportFilters($request);
@@ -930,10 +930,7 @@ public function farms(Request $request)
             );
         }
 
-        $this->applyDateFilters(
-            $reports,
-            $filters
-        );
+        $this->applyDateFilters($reports, $filters, 'damage_reports.created_at');
 
         return response()->json([
             'summary' => [
