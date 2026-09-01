@@ -148,7 +148,7 @@ class DistributionEventController extends Controller
                     '-' .
                     strtoupper(Str::random(6)),
 
-                'letter_image_path' => $letterPath,
+                'letter_image' => $letterPath,
 
                 'title' => $request->title,
 
@@ -640,10 +640,10 @@ class DistributionEventController extends Controller
                  * Delete uploaded letter.
                  */
 
-                if ($event->letter_image_path) {
+                if ($event->letter_image) {
 
                     Storage::disk('public')->delete(
-                        $event->letter_image_path
+                        $event->letter_image
                     );
                 }
 

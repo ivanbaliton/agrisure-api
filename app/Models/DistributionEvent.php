@@ -8,6 +8,7 @@ class DistributionEvent extends Model
 {
     protected $fillable = [
         'reference_no',
+        'letter_image',          // ✅ Add this
         'title',
         'distribution_date',
         'distribution_time',
@@ -16,6 +17,13 @@ class DistributionEvent extends Model
         'status',
         'published_at',
         'completed_at',
+    ];
+
+    protected $casts = [
+        'distribution_date' => 'date',
+        'distribution_time' => 'datetime:H:i',
+        'published_at' => 'datetime',
+        'completed_at' => 'datetime',
     ];
 
     public function lists()
