@@ -171,7 +171,8 @@ class ReportController extends Controller
 
         $this->applyDateFilters(
             $claims,
-            $filters
+            $filters,
+            'damage_reports.created_at'
         );
 
         if (!empty($filters['barangay_id'])) {
@@ -2193,7 +2194,8 @@ public function farms(Request $request)
 
         $this->applyDateFilters(
             $claims,
-            $filters
+            $filters,
+            'damage_reports.created_at'
         );
 
         /*
