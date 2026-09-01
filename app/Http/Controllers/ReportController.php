@@ -1170,7 +1170,8 @@ public function farms(Request $request)
 
         $this->applyDateFilters(
             $claims,
-            $filters
+            $filters,
+            'damage_reports.created_at'
         );
 
         return response()->json([
