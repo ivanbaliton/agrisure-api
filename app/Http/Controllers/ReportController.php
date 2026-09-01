@@ -1115,6 +1115,11 @@ public function farms(Request $request)
      * - Barangay
      * - Crop
      * - Claim Status
+     *
+     * NOTE: The claims table has no monetary amount column
+     * (there is no claim_amount field in the schema), so this
+     * report is count-based only. If a payout-amount column is
+     * added later, the amount aggregates can be reintroduced here.
      * ============================================================
      */
     public function claims(Request $request)
@@ -1190,16 +1195,6 @@ public function farms(Request $request)
                 'rejected' => (clone $claims)
                     ->where('status', 'rejected')
                     ->count(),
-
-                'total_claim_amount' => round(
-                    (clone $claims)->sum('claim_amount'),
-                    2
-                ),
-
-                'average_claim_amount' => round(
-                    (clone $claims)->avg('claim_amount') ?? 0,
-                    2
-                ),
             ],
 
             'status_distribution' => (clone $claims)
@@ -1213,8 +1208,7 @@ public function farms(Request $request)
             'monthly_claims' => (clone $claims)
                 ->selectRaw(
                     'MONTH(created_at) as month,
-                    COUNT(*) as total,
-                    SUM(claim_amount) as amount'
+                    COUNT(*) as total'
                 )
                 ->groupByRaw('MONTH(created_at)')
                 ->orderByRaw('MONTH(created_at)')
@@ -1237,9 +1231,6 @@ public function farms(Request $request)
                     'farms.crop_type',
                     DB::raw(
                         'COUNT(claims.id) as total'
-                    ),
-                    DB::raw(
-                        'SUM(claims.claim_amount) as amount'
                     )
                 )
                 ->groupBy('farms.crop_type')
@@ -1250,9 +1241,6 @@ public function farms(Request $request)
                     'barangays.name',
                     DB::raw(
                         'COUNT(claims.id) as total_claims'
-                    ),
-                    DB::raw(
-                        'COALESCE(SUM(claims.claim_amount), 0) as total_amount'
                     )
                 )
                 ->leftJoin(
@@ -1316,14 +1304,14 @@ public function farms(Request $request)
                     'barangays.id',
                     'barangays.name'
                 )
-                ->orderByDesc('total_amount')
+                ->orderByDesc('total_claims')
                 ->get(),
 
             'top_barangays' => Barangay::select(
                     'barangays.id',
                     'barangays.name',
                     DB::raw(
-                        'COALESCE(SUM(claims.claim_amount), 0) as total_amount'
+                        'COUNT(claims.id) as total_claims'
                     )
                 )
                 ->leftJoin(
@@ -1378,7 +1366,7 @@ public function farms(Request $request)
                     'barangays.id',
                     'barangays.name'
                 )
-                ->orderByDesc('total_amount')
+                ->orderByDesc('total_claims')
                 ->limit(10)
                 ->get(),
         ]);
@@ -2067,6 +2055,11 @@ public function farms(Request $request)
      * - Season
      * - Barangay
      * - Crop
+     *
+     * NOTE: The claims table has no monetary amount column
+     * (there is no claim_amount field in the schema), so the
+     * claims-related KPIs and barangay rankings below are
+     * count-based only.
      * ============================================================
      */
     public function executive(Request $request)
@@ -2311,11 +2304,6 @@ public function farms(Request $request)
                     )
                     ->count(),
 
-                'claims_released_amount' => round(
-                    (clone $claims)->sum('claim_amount'),
-                    2
-                ),
-
                 'distribution_events' => $distribution->count(),
 
                 'inventory_items' => InventorySupply::count(),
@@ -2430,7 +2418,7 @@ public function farms(Request $request)
             'top_claim_barangays' => Barangay::select(
                     'barangays.name',
                     DB::raw(
-                        'COALESCE(SUM(claims.claim_amount), 0) as amount'
+                        'COUNT(claims.id) as total'
                     )
                 )
                 ->leftJoin(
@@ -2494,7 +2482,7 @@ public function farms(Request $request)
                     'barangays.id',
                     'barangays.name'
                 )
-                ->orderByDesc('amount')
+                ->orderByDesc('total')
                 ->limit(5)
                 ->get(),
 
